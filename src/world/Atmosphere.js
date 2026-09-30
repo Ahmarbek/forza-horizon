@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { FOG } from './Fog.js';
 
 /**
  * Atmosphere.js
@@ -41,7 +42,7 @@ export class Atmosphere {
       uSunCol: { value: new THREE.Color(1, 0.95, 0.85) },
       uSkyCol: { value: new THREE.Color(0.55, 0.65, 0.8) },
       uTime: { value: 0 },
-      uCover: { value: 0.6 },
+      uCover: { value: 0.66 },
       uNight: { value: 0 },
       uCam: { value: new THREE.Vector3() },
     };
@@ -116,7 +117,7 @@ export class Atmosphere {
     this.hemi = new THREE.HemisphereLight(0xbfd9ff, 0x4a5a3a, 0.5);
     scene.add(this.hemi);
 
-    scene.fog = new THREE.FogExp2(0xb8cde0, 0.00028);
+    scene.fog = new THREE.FogExp2(0xb8cde0, 0.00022);
 
     // --- Environment map from the sky
     this.pmrem = new THREE.PMREMGenerator(renderer);
@@ -150,8 +151,8 @@ export class Atmosphere {
     for (const s of [this.sky, this.envSky]) {
       const u = s.material.uniforms;
       u.sunPosition.value.copy(this.sunDir);
-      u.rayleigh.value = THREE.MathUtils.lerp(2.6, 1.4, day);
-      u.turbidity.value = THREE.MathUtils.lerp(7, 4, day);
+      u.rayleigh.value = THREE.MathUtils.lerp(2.6, 2.0, day);
+      u.turbidity.value = THREE.MathUtils.lerp(6.5, 3.0, day);
     }
 
     // light colours
@@ -174,9 +175,13 @@ export class Atmosphere {
     this.hemi.color.set('#ffc49a').lerp(new THREE.Color('#bcd4f5'), day).lerp(new THREE.Color('#223055'), this.night);
     this.hemi.groundColor.set('#3a3a2a').lerp(new THREE.Color('#10131a'), this.night);
 
-    const fog = new THREE.Color('#b9c9da').lerp(new THREE.Color('#e7b48f'), golden * 0.85).lerp(new THREE.Color('#0b1020'), this.night);
+    const fog = new THREE.Color('#aec3d8').lerp(new THREE.Color('#d9a888'), golden * 0.8).lerp(new THREE.Color('#0b1020'), this.night);
     this.scene.fog.color.copy(fog);
     this.fogColor = fog;
+    // height fog: a touch denser (morning/evening haze) when the sun is low
+    this.scene.fog.density = THREE.MathUtils.lerp(0.00032, 0.0002, day) * (1 - this.night * 0.25);
+    FOG.sunDir.value.copy(this._lightDir);
+    FOG.sunColor.value.copy(sunCol).lerp(new THREE.Color('#ffd9a8'), 0.4).multiplyScalar(isMoon ? 0.15 : 1.05 * dusk).lerp(fog, 0.3);
 
     const cu = this.cloudUniforms;
     cu.uSunCol.value.copy(sunCol).lerp(new THREE.Color('#ffd0a8'), golden * 0.5);

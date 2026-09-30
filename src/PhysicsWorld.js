@@ -123,21 +123,24 @@ export class PhysicsWorld {
     }
   }
 
+  /** One fixed body that carries every static prop collider (cheap for tens of thousands). */
+  _staticBody() {
+    if (!this._statics) this._statics = this.world.createRigidBody(this.RAPIER.RigidBodyDesc.fixed());
+    return this._statics;
+  }
+
   /** Static oriented box (rotation about Y only). */
   addStaticBox(position, halfExtents, rotationY = 0) {
     if (this.backend === 'rapier') {
       const R = this.RAPIER;
       _q1.setFromAxisAngle(_v1.set(0, 1, 0), rotationY);
-      const body = this.world.createRigidBody(
-        R.RigidBodyDesc.fixed()
-          .setTranslation(position.x, position.y, position.z)
-          .setRotation({ x: _q1.x, y: _q1.y, z: _q1.z, w: _q1.w })
-      );
       const desc = R.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+        .setTranslation(position.x, position.y, position.z)
+        .setRotation({ x: _q1.x, y: _q1.y, z: _q1.z, w: _q1.w })
         .setFriction(0.4)
         .setRestitution(0.2)
         .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
-      this.world.createCollider(desc, body);
+      this.world.createCollider(desc, this._staticBody());
     } else {
       this.lite.addStaticBox(position, halfExtents, rotationY);
     }
@@ -158,7 +161,7 @@ export class PhysicsWorld {
       _q1.setFromAxisAngle(_v1.set(0, 1, 0), def.yaw);
       const body = this.world.createRigidBody(
         R.RigidBodyDesc.fixed()
-          .setTranslation(def.x, 0, def.z)
+          .setTranslation(def.x, def.y ?? 0, def.z)
           .setRotation({ x: _q1.x, y: _q1.y, z: _q1.z, w: _q1.w })
       );
       const desc = R.ColliderDesc.convexHull(pts)
@@ -167,6 +170,23 @@ export class PhysicsWorld {
       this.world.createCollider(desc, body);
     } else {
       this.lite.addRamp(def);
+    }
+  }
+
+  /**
+   * Static triangle mesh (bridge decks). The lite solver gets the supplied
+   * oriented boxes instead: [{ x, y, z, hx, hy, hz, yaw }].
+   */
+  addTrimesh(vertices, indices, liteBoxes = []) {
+    if (this.backend === 'rapier') {
+      const R = this.RAPIER;
+      const body = this.world.createRigidBody(R.RigidBodyDesc.fixed());
+      const desc = R.ColliderDesc.trimesh(vertices, indices)
+        .setFriction(1.0)
+        .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
+      this.world.createCollider(desc, body);
+    } else {
+      for (const b of liteBoxes) this.lite.addStaticBox(_v1.set(b.x, b.y, b.z), _v2.set(b.hx, b.hy, b.hz), b.yaw);
     }
   }
 
@@ -183,14 +203,12 @@ export class PhysicsWorld {
   addStaticCylinder(position, radius, halfHeight) {
     if (this.backend === 'rapier') {
       const R = this.RAPIER;
-      const body = this.world.createRigidBody(
-        R.RigidBodyDesc.fixed().setTranslation(position.x, position.y + halfHeight, position.z)
-      );
       const desc = R.ColliderDesc.cylinder(halfHeight, radius)
+        .setTranslation(position.x, position.y + halfHeight, position.z)
         .setFriction(0.4)
         .setRestitution(0.1)
         .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
-      this.world.createCollider(desc, body);
+      this.world.createCollider(desc, this._staticBody());
     } else {
       _v4.set(radius, halfHeight, radius);
       _v3.set(position.x, position.y + halfHeight, position.z);
@@ -445,7 +463,7 @@ class LiteSolver {
 
   addRamp(def) {
     this.ramps.push({
-      x: def.x, z: def.z, cos: Math.cos(def.yaw), sin: Math.sin(def.yaw),
+      x: def.x, y: def.y ?? 0, z: def.z, cos: Math.cos(def.yaw), sin: Math.sin(def.yaw),
       hw: def.width / 2, l: def.length, h: def.height,
     });
   }
@@ -462,7 +480,7 @@ class LiteSolver {
       const dx = x - r.x, dz = z - r.z;
       const lx = r.cos * dx - r.sin * dz, lz = r.sin * dx + r.cos * dz;
       if (lx < -r.hw || lx > r.hw || lz < 0 || lz > r.l) continue;
-      const hy = (lz / r.l) * r.h;
+      const hy = r.y + (lz / r.l) * r.h;
       if (hy > best) {
         best = hy;
         if (normal) {

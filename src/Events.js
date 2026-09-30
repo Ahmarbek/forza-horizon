@@ -41,9 +41,43 @@ export const EVENTS = [
     id: 'city-attack', type: 'trial', route: 'city', name: 'Neon Time Attack', laps: 2, ai: 0,
     desc: 'Best lap counts', stars: [150, 130, 118], payout: [5000, 11000, 20000], xp: [900, 1700, 2800],
   },
+  {
+    id: 'coastal-circuit', type: 'race', route: 'coast', name: 'Coastal Circuit', laps: 1, ai: 5, kind: 'ROAD RACE',
+    desc: 'Cliffs, beaches & paddy fields · 12 km', payout: [70000, 42000, 26000, 15000, 9000, 6000], xp: [6000, 4300, 3200, 2400, 1800, 1300],
+  },
+  {
+    id: 'lakeside-loop', type: 'race', route: 'lake', name: 'Lakeside Loop', laps: 2, ai: 5, kind: 'ROAD RACE',
+    desc: 'Over Sakura Bridge · 2 laps', payout: [38000, 23000, 14000, 8500, 5500, 3800], xp: [3400, 2500, 1900, 1400, 1100, 800],
+  },
+  {
+    id: 'summit-sprint', type: 'race', route: 'summit', name: 'Summit Hill Climb', laps: 1, ai: 5, kind: 'SPRINT',
+    desc: 'Hairpins up to the snow line', payout: [50000, 30000, 19000, 11000, 7000, 4800], xp: [4500, 3300, 2500, 1800, 1300, 1000],
+  },
+  {
+    id: 'kiso-rally', type: 'race', route: 'rally', name: 'Kiso Forest Rally', laps: 2, ai: 5, kind: 'DIRT RACE',
+    desc: 'Gravel trail through the pines · 2 laps', payout: [48000, 29000, 18000, 10500, 6800, 4600], xp: [4300, 3100, 2400, 1700, 1300, 950],
+  },
+  {
+    id: 'minato-streets', type: 'race', route: 'minato', name: 'Minato Harbour GP', laps: 3, ai: 5, kind: 'STREET RACE',
+    desc: 'Tight harbour streets · 3 laps', payout: [36000, 22000, 13500, 8000, 5200, 3600], xp: [3300, 2400, 1800, 1300, 1000, 750],
+  },
+  {
+    id: 'airfield-drag', type: 'race', route: 'airfield', name: 'Airfield Drag', laps: 1, ai: 3, kind: 'DRAG RACE',
+    desc: 'Flat out down the runway · 1 km', payout: [15000, 9000, 6000, 3500], xp: [1500, 1100, 800, 600],
+  },
+  {
+    id: 'lake-trial', type: 'trial', route: 'lake', name: 'Sakura Bridge Time Trial', laps: 2, ai: 0,
+    desc: 'Best lap counts', stars: [150, 128, 116], payout: [5000, 11000, 20000], xp: [900, 1700, 2800],
+  },
 ];
 
 const DIFFICULTY = { easy: 0.86, normal: 0.95, hard: 1.03, unbeatable: 1.1 };
+const AI_UPGRADES = {
+  easy: { engine: 0, grip: 0, brakes: 0 },
+  normal: { engine: 1, grip: 0, brakes: 1 },
+  hard: { engine: 1, grip: 1, brakes: 1 },
+  unbeatable: { engine: 2, grip: 2, brakes: 2 },
+};
 const RIVAL_NAMES = ['Kenji', 'Aiko', 'Marco', 'Lena', 'Diego', 'Yuki', 'Sven', 'Priya'];
 const RIVAL_COLORS = ['#e0162b', '#27c485', '#ffd23f', '#8b5cff', '#1b1d22', '#ff7a1a', '#1f6feb', '#f4f4f4'];
 const CP_COUNT = 10;
@@ -90,7 +124,14 @@ export class EventManager {
     this.route = route;
     const n = route.count;
     this.def = def;
-    this.cpIndices = Array.from({ length: CP_COUNT }, (_, k) => (route.startIndex + Math.round((k * n) / CP_COUNT)) % n);
+    this.sprint = !route.closed;
+    if (this.sprint) {
+      // point-to-point: gates spread from the start line to the finish line
+      const a = route.startIndex, b = route.finishIndex ?? route.count - 1;
+      this.cpIndices = Array.from({ length: CP_COUNT }, (_, k) => Math.round(a + ((k + 1) * (b - a)) / CP_COUNT));
+    } else {
+      this.cpIndices = Array.from({ length: CP_COUNT }, (_, k) => (route.startIndex + Math.round((k * n) / CP_COUNT)) % n);
+    }
     env.showCheckpoints(route, this.cpIndices);
 
     const skill = DIFFICULTY[this.progression.settings.difficulty] ?? 0.95;
@@ -101,7 +142,8 @@ export class EventManager {
     const laneW = Math.min(4, route.width / 2 - 2.2);
     for (let i = 0; i < def.ai; i++) {
       const base = cars[i % cars.length];
-      const v = new Vehicle(this.scene, this.physics, tunePreset(base, { engine: 1, grip: 1, brakes: 1 }), { loadModel: false, name: base.name });
+      const ups = AI_UPGRADES[this.progression.settings.difficulty] ?? AI_UPGRADES.normal;
+      const v = new Vehicle(this.scene, this.physics, tunePreset(base, ups), { loadModel: false, name: base.name });
       v.setPaint(RIVAL_COLORS[i % RIVAL_COLORS.length]);
       v.setHeadlights(env.lampLevel ?? 0);
       const yaw = route.gridSlot(i, _v);
@@ -125,7 +167,7 @@ export class EventManager {
     this.state = 'countdown';
     this.wrongWayTime = 0;
     this.ui.showRaceHUD(true, def);
-    env.setActiveCheckpoint(0, def.laps === 1);
+    env.setActiveCheckpoint(0, !this.sprint && def.laps === 1);
   }
 
   _racer(vehicle, driver, name) {
@@ -190,7 +232,8 @@ export class EventManager {
     if (this.state === 'running' || this.state === 'finished') this.time += dt;
 
     // --- Progress tracking
-    for (const r of this.racers) {
+    if (this.sprint) this._updateSprint(dt);
+    else for (const r of this.racers) {
       const p = r.vehicle.root.position;
       r.idx = route.nearestIndex(p.x, p.z, r.idx);
       r.prevRel = r.rel;
@@ -248,6 +291,36 @@ export class EventManager {
     });
   }
 
+  /** Point-to-point progress: gates in order, finish at route.finishIndex. */
+  _updateSprint() {
+    const route = this.route;
+    const fin = route.finishIndex ?? route.count - 1;
+    for (const r of this.racers) {
+      const p = r.vehicle.root.position;
+      r.idx = route.nearestIndex(p.x, p.z, r.idx);
+      r.rel = r.idx - route.startIndex;
+      if (r.finished) { r.progress = 1e9 - r.finishTime; continue; }
+      if (this.state === 'countdown') { r.progress = r.rel; continue; }
+      if (r.lap === 0) { r.lap = 1; r.lapStart = 0; r.nextCp = 0; }
+      const cp = this.cpIndices[r.nextCp];
+      if (cp != null && r.idx >= cp && r.idx < cp + 40) {
+        if (r.nextCp === CP_COUNT - 1 || r.idx >= fin) {
+          r.finished = true;
+          r.finishTime = this.time;
+          r.bestLap = this.time;
+          if (!r.driver) this._playerFinished();
+        } else {
+          r.nextCp++;
+          if (!r.driver) {
+            this.audio.checkpoint();
+            this.env.setActiveCheckpoint(r.nextCp, r.nextCp === CP_COUNT - 1);
+          }
+        }
+      }
+      r.progress = r.rel;
+    }
+  }
+
   _crossLine(r) {
     const def = this.def;
     const isPlayer = !r.driver;
@@ -282,7 +355,7 @@ export class EventManager {
     this.env.hideCheckpoints();
 
     const n = this.route.count;
-    const total = def.laps * n;
+    const total = this.sprint ? (this.route.finishIndex ?? n - 1) - this.route.startIndex : def.laps * n;
     for (const r of this.racers) {
       if (r.finished) continue;
       const done = Math.max(1, r.progress);
@@ -484,10 +557,13 @@ export class StuntManager {
 // Free-roam traffic
 // ============================================================================
 const TRAFFIC_PLAN = [
-  { route: 'highway', count: 3, skill: 0.8, lane: 4.4 },
-  { route: 'city', count: 2, skill: 0.62, lane: 3.2 },
-  { route: 'festival', count: 1, skill: 0.72, lane: 3 },
-  { route: 'mountain', count: 1, skill: 0.7, lane: 2.3 },
+  { route: 'highway', count: 3, skill: 0.8, lane: 4.4, cap: 36 },
+  { route: 'city', count: 2, skill: 0.62, lane: 3.2, cap: 17 },
+  { route: 'festival', count: 1, skill: 0.72, lane: 3, cap: 26 },
+  { route: 'mountain', count: 1, skill: 0.7, lane: 2.3, cap: 24 },
+  { route: 'coast', count: 3, skill: 0.75, lane: 2.9, cap: 30 },
+  { route: 'lake', count: 1, skill: 0.7, lane: 2.7, cap: 24 },
+  { route: 'minato', count: 2, skill: 0.6, lane: 3, cap: 14 },
 ];
 
 export class AmbientTraffic {
@@ -524,7 +600,7 @@ export class AmbientTraffic {
         v.reset(_v, route.yaw(idx));
         const driver = new AIDriver(route, { skill: plan.skill + (k % 3) * 0.03, lane, name: base.name });
         driver.enabled = true;
-        this.cars.push({ vehicle: v, driver, cap: plan.route === 'city' ? 17 : plan.route === 'highway' ? 36 : 26 });
+        this.cars.push({ vehicle: v, driver, cap: plan.cap });
       }
     }
   }

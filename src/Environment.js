@@ -1,24 +1,33 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createPetalMaterial } from './Shaders.js';
-import { Terrain } from './world/Terrain.js';
-import { RoadNetwork, CITY_RECT } from './world/Roads.js';
+import { Terrain, WORLD_HALF, SEA_LEVEL, LAKE, coastLine } from './world/Terrain.js';
+import { RoadNetwork, CITY_RECT, MINATO_RECT, MINATO_STEP, MINATO_STREET_WIDTH, MINATO_Y, AIRFIELD } from './world/Roads.js';
 import { City } from './world/City.js';
 import { Vegetation } from './world/Vegetation.js';
 import { Atmosphere } from './world/Atmosphere.js';
+import { Water } from './world/Water.js';
+import { Landmarks } from './world/Landmarks.js';
+import { SurfaceMap } from './world/Surfaces.js';
+import { SURFACE } from './Vehicle.js';
+import { installHeightFog, patchFogMaterials } from './world/Fog.js';
 import { mulberry32 } from './world/Noise.js';
 
 /**
  * Environment.js
  * --------------
- * Assembles the 4 km open world:
+ * Assembles the 8 km open world:
  *  - Atmosphere (physical sky, clouds, sun/moon, fog, IBL)
- *  - Terrain (hills, border mountains, road cuttings) + heightfield physics
- *  - Road network (Festival Loop, Horizon Highway, Fuji Pass, connectors)
- *  - Neon City downtown
+ *  - Terrain (hills, Summit massif, coast, lake, border ranges) + heightfield physics
+ *  - Road network (Festival Loop, Horizon Highway, Fuji Pass, Coastal Road,
+ *    Lakeside Loop with its bridge, Summit Road, Kiso forest trail, runway,
+ *    connectors) and the surface map that tells tyres what they drive on
+ *  - Neon City downtown and the Minato Bay harbour town
+ *  - Ocean and Lake Sakura, landmarks (wind farm, pagoda, lighthouse, village,
+ *    observatory, airfield, Ferris wheel)
  *  - Forests, sakura groves and GPU grass
  *  - Festival site: plaza, gantry, cones, danger-sign ramps, stunt zones,
- *    race checkpoint gates, falling petals, distant Fuji backdrop
+ *    race checkpoint gates, falling petals, distant Mt. Fuji backdrop
  */
 
 const FESTIVAL_ZONE = { minX: -420, minZ: -480, maxX: 620, maxZ: 380 };
@@ -41,7 +50,7 @@ export class Environment {
     this.gates = [];
     this.instanceCount = 0;
     this.clearZones = [];
-    this.mapBounds = { minX: -2048, maxX: 2048, minZ: -2048, maxZ: 2048 };
+    this.mapBounds = { minX: -WORLD_HALF, maxX: WORLD_HALF, minZ: -WORLD_HALF, maxZ: WORLD_HALF };
   }
 
   /** Heavy: builds everything. `progress(frac, label)` is awaited between steps. */
@@ -50,36 +59,59 @@ export class Environment {
     const timings = [];
     let t0 = performance.now();
     const mark = (label) => { const t = performance.now(); timings.push(`${label} ${Math.round(t - t0)}ms`); t0 = t; };
-    const step = async (frac, text) => { mark(text); await progress(frac, text); t0 = performance.now(); };
+    const step = async (frac, text) => { await progress(frac, text); t0 = performance.now(); };
 
-    await step(0.22, 'Painting the sky…');
+    await step(0.2, 'Painting the sky…');
+    installHeightFog();
     this.atmo = new Atmosphere(scene, renderer);
 
-    await step(0.3, 'Shaping 16 km² of terrain…');
+    await step(0.25, 'Shaping 67 km² of terrain…');
     const terrain = new Terrain();
     this.terrain = terrain;
-    terrain.addFlatRect(FESTIVAL_ZONE.minX, FESTIVAL_ZONE.minZ, FESTIVAL_ZONE.maxX, FESTIVAL_ZONE.maxZ, 170);
-    terrain.addFlatRect(CITY_RECT.minX - 40, CITY_RECT.minZ - 40, CITY_RECT.maxX + 40, CITY_RECT.maxZ + 40, 170);
+    terrain.addFlatRect(FESTIVAL_ZONE.minX, FESTIVAL_ZONE.minZ, FESTIVAL_ZONE.maxX, FESTIVAL_ZONE.maxZ, 170, 0);
+    terrain.addFlatRect(CITY_RECT.minX - 40, CITY_RECT.minZ - 40, CITY_RECT.maxX + 40, CITY_RECT.maxZ + 40, 170, 0);
+    terrain.addFlatRect(MINATO_RECT.minX - 30, MINATO_RECT.minZ - 30, MINATO_RECT.maxX + 30, MINATO_RECT.maxZ + 30, 150, MINATO_Y);
+    this.airfieldZone = terrain.addFlatRect(AIRFIELD.minX, AIRFIELD.minZ, AIRFIELD.maxX, AIRFIELD.maxZ, 160, 'auto');
     const roads = new RoadNetwork(scene, physics, renderer, terrain);
     this.roads = roads;
     this.routes = roads.routes;
-    for (const [x, z] of roads.junctions()) terrain.addFlatCircle(x, z, 30, 110);
+    this.routes.airfield.flat = true;
+    this.routes.airfield.flatY = this.airfieldZone.y;
+    for (const [x, z] of roads.junctions()) terrain.addFlatCircle(x, z, 30, 110, 'auto');
     this._defineRamps();
     terrain.build(roads.all);
-    terrain.buildMask(roads.all, CITY_RECT);
+    mark('terrain');
+    terrain.buildMask(roads.all, [CITY_RECT, MINATO_RECT]);
+    mark('masks');
     scene.add(terrain.createMesh());
     physics.addHeightfield(terrain.seg, terrain.physicsHeights(), terrain.size, terrain);
+    physics.groundHeight = (x, z) => terrain.heightAt(x, z);
+    mark('terrain mesh + physics');
 
-    await step(0.42, 'Paving 20 km of road…');
+    await step(0.38, 'Paving 60 km of road…');
     roads.build();
     this.instanceCount += roads.instanceCount;
     this._setStarts();
+    this._buildSurfaces();
+    mark('roads');
 
-    await step(0.52, 'Raising Neon City…');
+    await step(0.48, 'Raising Neon City and Minato Bay…');
     this.city = new City(scene, physics, renderer).build(roads.textures);
-    this.instanceCount += this.city.instanceCount;
+    this.minato = new City(scene, physics, renderer, {
+      name: 'Minato Bay', rect: MINATO_RECT, step: MINATO_STEP, streetWidth: MINATO_STREET_WIDTH,
+      baseY: MINATO_Y, seed: 777, style: 'harbor', parks: [8, 21],
+    }).build(roads.textures);
+    this.cities = [this.city, this.minato];
+    for (const c of this.cities) this.instanceCount += c.instanceCount;
+    mark('cities');
 
-    await step(0.6, 'Setting up the festival…');
+    await step(0.56, 'Filling the lake and the ocean…');
+    this.water = new Water(scene, terrain).build();
+    this.landmarks = new Landmarks(scene, physics, terrain, roads).build();
+    this.labels = this.landmarks.labels;
+    mark('water + landmarks');
+
+    await step(0.62, 'Setting up the festival…');
     this._buildPlaza();
     this._buildGantry();
     this._buildRamps();
@@ -88,6 +120,7 @@ export class Environment {
     this._buildStunts();
     this._buildBackdrop();
     this._buildPetals();
+    mark('festival');
 
     await step(0.7, 'Growing forests and sakura groves…');
     this.veg = new Vegetation(scene, physics, terrain);
@@ -97,22 +130,42 @@ export class Environment {
       for (const side of [-1, 1]) {
         const off = side * (fest.width / 2 + 10 + this.rng() * 5);
         const x = fest.xs[i] + fest.tz[i] * off, z = fest.zs[i] - fest.tx[i] * off;
-        if (this.inPlaza(x, z, 10) || this.inClearZone(x, z)) continue;
+        if (this.inPlaza(x, z, 10) || this.inClearZone(x, z) || this.landmarks.blocks(x, z)) continue;
         if (roads.nearest(x, z, (r) => r !== fest).d2 < 20 * 20) continue;
         sakuraRows.push({ x, z, type: 'sakura' });
       }
     }
+    // cherry trees along the lake shore road
+    const lake = this.routes.lake;
+    for (let i = 0; i < lake.count; i += Math.round(26 / lake.spacing)) {
+      if (lake.bridge && lake.bridge[i]) continue;
+      for (const side of [-1, 1]) {
+        const off = side * (lake.width / 2 + 6 + this.rng() * 4);
+        const x = lake.xs[i] + lake.tz[i] * off, z = lake.zs[i] - lake.tx[i] * off;
+        if (terrain.isWater(x, z, -1) || this.landmarks.blocks(x, z)) continue;
+        if (roads.nearest(x, z, (r) => r !== lake).d2 < 14 * 14) continue;
+        sakuraRows.push({ x, z, type: 'sakura' });
+      }
+    }
+    const extraSpots = [...sakuraRows];
+    for (const c of this.cities) extraSpots.push(...c.treeSpots);
     this.veg.build({
+      renderer,
       festivalCenter: FESTIVAL_CENTER,
-      extraSpots: [...this.city.treeSpots, ...sakuraRows],
-      avoid: (x, z) => this.inPlaza(x, z, 12) || this.inClearZone(x, z) || this.city.contains(x, z, 25),
+      extraSpots,
+      avoid: (x, z) => this.inPlaza(x, z, 12) || this.inClearZone(x, z)
+        || this.cities.some((c) => c.contains(x, z, 25)) || this.landmarks.blocks(x, z)
+        || (x > AIRFIELD.minX - 60 && x < AIRFIELD.maxX + 60 && z > AIRFIELD.minZ - 140 && z < AIRFIELD.maxZ + 60)
+        || terrain.isWater(x, z, -1.5) || terrain.mask2At(x, z, 0) > 0.35
+        || (terrain.mask2At(x, z, 1) > 0.5 && this.rng() < 0.93),
     });
     this.veg.buildGrass();
     this.instanceCount += this.veg.instanceCount;
     this.treePositions = this.veg.treePositions;
+    mark('vegetation');
 
     this.setTimeOfDay(38);
-    mark('finish');
+    patchFogMaterials(scene);
     console.info('[Environment] build timings: ' + timings.join(' · '));
     return this;
   }
@@ -120,8 +173,36 @@ export class Environment {
   // ------------------------------------------------------------ Helpers
   heightAt(x, z) {
     let h = this.terrain.heightAt(x, z);
-    if (this.city && this.city.contains(x, z)) h = Math.max(h, 0.04);
+    if (this.cities) for (const c of this.cities) if (c.contains(x, z)) h = Math.max(h, c.baseY + 0.04);
     return h;
+  }
+
+  /** How deep x,y,z is under water (≤ 0 when dry). */
+  waterDepthAt(x, y, z) {
+    const wl = this.terrain.waterLevelAt(x, z);
+    return wl == null ? 0 : wl - y;
+  }
+
+  cityAt(x, z, margin = 0) {
+    return this.cities?.find((c) => c.contains(x, z, margin)) ?? null;
+  }
+
+  /** Region name for the HUD banner. */
+  regionAt(x, z) {
+    const city = this.cityAt(x, z, 20);
+    if (city) return city.name;
+    if (x > FESTIVAL_ZONE.minX && x < FESTIVAL_ZONE.maxX && z > FESTIVAL_ZONE.minZ && z < FESTIVAL_ZONE.maxZ) return 'Festival Site';
+    if (x > AIRFIELD.minX - 150 && x < AIRFIELD.maxX + 150 && z > AIRFIELD.minZ - 200 && z < AIRFIELD.maxZ + 150) return 'Airfield';
+    if (Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 450) return 'Lake Sakura';
+    if (this.terrain.farmWeight(x, z) > 0.5) return 'Sakura Village';
+    const dc = x - coastLine(z);
+    if (dc > -380) return z > 700 && z < 2600 ? 'Sea Cliffs' : 'Sunset Beach';
+    if (Math.hypot((x + 1650) / 900, (z + 3050) / 800) < 1) return this.terrain.heightAt(x, z) > 230 ? 'Summit Snowfields' : 'Summit Road';
+    if (Math.hypot((x + 2800) / 800, (z - 300) / 1400) < 1) return 'Kiso Forest';
+    if (Math.hypot((x - 1650) / 700, (z - 2350) / 800) < 1) return 'Wind Farm Downs';
+    const n = this.roads.nearest(x, z);
+    if (n.d2 < 60 * 60 && n.route.name) return n.route.name;
+    return 'Countryside';
   }
 
   inPlaza(x, z, margin = 0) {
@@ -137,17 +218,19 @@ export class Environment {
     return false;
   }
 
-  /** Nearest drivable road for resets: { route, index }. */
+  /** Nearest drivable road for resets: { point, yaw, route?, index? }. */
   nearestRoad(x, z) {
-    // inside the city, snap to the closest street centre-line instead
-    if (this.city.contains(x, z, 5)) {
-      const { xs, zs } = this.city.streetLines();
+    // inside a town, snap to the closest street centre-line instead
+    const city = this.cityAt(x, z, 5);
+    if (city) {
+      const { xs, zs } = city.streetLines();
+      const R = city.rect;
       let best = null;
-      for (const sx of xs) { const d = Math.abs(x - sx); if (!best || d < best.d) best = { d, x: sx, z: THREE.MathUtils.clamp(z, CITY_RECT.minZ, CITY_RECT.maxZ), yaw: z > 0 ? 0 : Math.PI }; }
-      for (const sz of zs) { const d = Math.abs(z - sz); if (d < best.d) best = { d, x: THREE.MathUtils.clamp(x, CITY_RECT.minX, CITY_RECT.maxX), z: sz, yaw: Math.PI / 2 }; }
-      return { point: new THREE.Vector3(best.x + 4, 0.2, best.z + 4), yaw: best.yaw };
+      for (const sx of xs) { const d = Math.abs(x - sx); if (!best || d < best.d) best = { d, x: sx, z: THREE.MathUtils.clamp(z, R.minZ, R.maxZ), yaw: z > (R.minZ + R.maxZ) / 2 ? Math.PI : 0 }; }
+      for (const sz of zs) { const d = Math.abs(z - sz); if (d < best.d) best = { d, x: THREE.MathUtils.clamp(x, R.minX, R.maxX), z: sz, yaw: Math.PI / 2 }; }
+      return { point: new THREE.Vector3(best.x + 3, city.baseY + 0.2, best.z + 3), yaw: best.yaw };
     }
-    const n = this.roads.nearest(x, z);
+    const n = this.roads.nearest(x, z, (r) => r.render || r.flat);
     const p = n.route.point(n.index, 0, new THREE.Vector3());
     return { point: p, yaw: n.route.yaw(n.index), route: n.route, index: n.index };
   }
@@ -158,8 +241,34 @@ export class Environment {
     r.city.startIndex = r.city.nearestIndex(-1375, 800);
     r.highway.startIndex = r.highway.nearestIndex(870, -150);
     r.mountain.startIndex = r.mountain.nearestIndex(-470, -300);
+    r.coast.startIndex = r.coast.nearestIndex(2555, 250);
+    r.lake.startIndex = r.lake.nearestIndex(203, 2230);
+    r.rally.startIndex = r.rally.nearestIndex(-2330, 330);
+    r.minato.startIndex = r.minato.nearestIndex(2150, -700);
+    r.summit.startIndex = Math.round(45 / r.summit.spacing);
+    r.airfield.startIndex = r.airfield.nearestIndex(-1740, 2700);
+    // sprint finish lines (open routes)
+    r.summit.finishIndex = r.summit.count - 1 - Math.round(25 / r.summit.spacing);
+    r.airfield.finishIndex = r.airfield.nearestIndex(-2740, 2700);
     this.startPosition = new THREE.Vector3(0, 1.2, -75);
     this.startYaw = 0;
+  }
+
+  /** Tyre surfaces: roads, shoulders, towns; terrain classified on demand. */
+  _buildSurfaces() {
+    const S = new SurfaceMap(this.terrain);
+    for (const r of this.roads.all) {
+      if (r.type === 'dirt') S.paintRoute(r, SURFACE.dirt, SURFACE.grass, 1.5);
+      else if (r.render) S.paintRoute(r, SURFACE.asphalt, SURFACE.gravel, r.type === 'runway' ? 1 : 2.4);
+    }
+    // street circuits + paved areas
+    for (const R of [CITY_RECT, MINATO_RECT]) S.paintRect(R.minX - 12, R.minZ - 12, R.maxX + 12, R.maxZ + 12, SURFACE.asphalt);
+    S.paintRect(PLAZA.minX, PLAZA.minZ, PLAZA.maxX, PLAZA.maxZ, SURFACE.asphalt);
+    S.paintRect(AIRFIELD.minX, AIRFIELD.minZ, AIRFIELD.maxX, AIRFIELD.minZ + 30, SURFACE.concrete);
+    // re-assert asphalt on the main roads over any shoulder paint
+    for (const r of this.roads.all) if (r.render && r.type !== 'dirt') S.paintRoute(r, SURFACE.asphalt, SURFACE.asphalt, 0);
+    this.surfaces = S;
+    this.physics.surfaceAt = (x, z) => S.at(x, z);
   }
 
   // -------------------------------------------------------------- Plaza
@@ -235,8 +344,9 @@ export class Environment {
   // -------------------------------------------------------------- Ramps
   _defineRamps() {
     this.ramps = [
-      { id: 'ramp-west', name: 'Sakura Leap', x: -130, z: -170, yaw: 0, width: 9, length: 15, height: 3.4 },
-      { id: 'ramp-north', name: 'Fuji Sky Jump', x: -250, z: 70, yaw: Math.PI / 2, width: 9, length: 16, height: 4.2 },
+      { id: 'ramp-west', name: 'Sakura Leap', x: -130, z: -170, yaw: 0, width: 9, length: 15, height: 3.4, y: 0 },
+      { id: 'ramp-north', name: 'Fuji Sky Jump', x: -250, z: 70, yaw: Math.PI / 2, width: 9, length: 16, height: 4.2, y: 0 },
+      { id: 'ramp-airfield', name: 'Airfield Launch', x: -2050, z: 2748, yaw: -Math.PI / 2, width: 10, length: 18, height: 5.2, y: this.airfieldZone.y },
     ];
     for (const r of this.ramps) {
       this.clearZones.push({ x: r.x, z: r.z, cos: Math.cos(r.yaw), sin: Math.sin(r.yaw), hw: 22, z0: -110, z1: 130 });
@@ -278,7 +388,7 @@ export class Environment {
       g.addGroup(6, 12, 1);
       g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, [topMat, sideMat]);
-      mesh.position.set(r.x, 0.01, r.z);
+      mesh.position.set(r.x, r.y + 0.01, r.z);
       mesh.rotation.y = r.yaw;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -287,7 +397,7 @@ export class Environment {
       const sign = makeSignMesh('DANGER SIGN', r.name, '#ffd23f', '#16181f');
       const side = new THREE.Vector3(Math.cos(r.yaw), 0, -Math.sin(r.yaw));
       const fwd = new THREE.Vector3(Math.sin(r.yaw), 0, Math.cos(r.yaw));
-      sign.position.set(r.x, 0, r.z).addScaledVector(side, hw + 4).addScaledVector(fwd, -12);
+      sign.position.set(r.x, r.y, r.z).addScaledVector(side, hw + 4).addScaledVector(fwd, -12);
       sign.rotation.y = r.yaw + Math.PI;
       this.scene.add(sign);
     }
@@ -424,6 +534,14 @@ export class Environment {
       { id: 'zone-coast', type: 'zone', name: 'Coastal Speed Zone', route: R.highway, index: at(R.highway, 880, 0), end: at(R.highway, 820, 700), stars: [100, 125, 145] },
       { id: 'drift-fuji', type: 'drift', name: 'Fuji Pass Drift Zone', route: R.mountain, index: at(R.mountain, -520, -700), end: at(R.mountain, -700, -1020), stars: [8000, 18000, 32000] },
       { id: 'trap-neon', type: 'trap', name: 'Neon Speed Trap', route: R.city, index: at(R.city, -1000, 625), stars: [70, 90, 110] },
+      { id: 'trap-cliff', type: 'trap', name: 'Cliffside Speed Trap', route: R.coast, index: at(R.coast, 2575, 1050), stars: [110, 135, 155] },
+      { id: 'zone-beach', type: 'zone', name: 'Sunset Beach Speed Zone', route: R.coast, index: at(R.coast, 2560, 700), end: at(R.coast, 2556, -60), stars: [105, 130, 150] },
+      { id: 'trap-bridge', type: 'trap', name: 'Sakura Bridge Speed Trap', route: R.lake, index: at(R.lake, 212, 2780), stars: [90, 110, 128] },
+      { id: 'drift-summit', type: 'drift', name: 'Summit Hairpins Drift Zone', route: R.summit, index: at(R.summit, -1050, -2400), end: at(R.summit, -1750, -2550), stars: [9000, 20000, 36000] },
+      { id: 'drift-kiso', type: 'drift', name: 'Kiso Forest Drift Zone', route: R.rally, index: at(R.rally, -3300, 700), end: at(R.rally, -3100, -400), stars: [9000, 20000, 34000] },
+      { id: 'zone-runway', type: 'zone', name: 'Runway Speed Zone', route: R.airfield, index: at(R.airfield, -1800, 2700), end: at(R.airfield, -2900, 2700), stars: [120, 150, 175] },
+      { id: 'trap-harbour', type: 'trap', name: 'Harbour Speed Trap', route: R.minato, index: at(R.minato, 2450, -400), stars: [65, 85, 100] },
+      { id: 'trap-farm', type: 'trap', name: 'Paddy Fields Speed Trap', route: R.coast, index: at(R.coast, 1215, -2300), stars: [95, 118, 135] },
     ];
     for (const r of this.ramps) this.stunts.push({ id: r.id, type: 'jump', name: r.name, ramp: r, stars: [40, 70, 100] });
 
@@ -442,8 +560,9 @@ export class Environment {
       addLine(st.index);
       if (st.end != null) addLine(st.end);
       const sign = makeSignMesh(labels[st.type], st.name, colors[st.type], '#0b0d14');
-      r.point(st.index - 14 / r.spacing, -(r.width / 2 + 4), sign.position);
-      sign.position.y = this.heightAt(sign.position.x, sign.position.z);
+      const si = r._wrap(Math.round(st.index - 14 / r.spacing));
+      r.point(si, -(r.width / 2 + 4), sign.position);
+      sign.position.y = r.bridge && r.bridge[si] ? r.ys[si] : this.heightAt(sign.position.x, sign.position.z);
       sign.rotation.y = r.yaw(st.index) + Math.PI;
       this.scene.add(sign);
     }
@@ -451,12 +570,11 @@ export class Environment {
 
   // ----------------------------------------------------------- Backdrop
   _buildBackdrop() {
-    // Distant Fuji + outer ranges beyond the playable border mountains
-    const rng = this.rng;
-    const geos = [];
+    // Mt. Fuji and outer ranges far beyond the playable border mountains.
+    // Unfogged but tinted towards the horizon colour so they read as distant.
     const snow = new THREE.Color('#eef2fb');
-    const rock = new THREE.Color('#58647a');
-    const forest = new THREE.Color('#2c4234');
+    const rock = new THREE.Color('#5a667c');
+    const forest = new THREE.Color('#2f4538');
     const colorize = (g, base, height, snowLine) => {
       const pos = g.attributes.position;
       const colors = new Float32Array(pos.count * 3);
@@ -471,39 +589,89 @@ export class Environment {
       return g;
     };
     const profile = [];
-    const H = 1500, Rr = 2600;
-    for (let i = 0; i <= 28; i++) {
-      const t = i / 28;
-      profile.push(new THREE.Vector2(i === 28 ? 90 : Rr * Math.pow(1 - t, 1.9) + 120 * (1 - t) + 90, t * H));
+    const H = 3700, Rr = 7200;
+    for (let i = 0; i <= 36; i++) {
+      const t = i / 36;
+      profile.push(new THREE.Vector2(i === 36 ? 260 : Rr * Math.pow(1 - t, 1.9) + 300 * (1 - t) + 260, t * H));
     }
-    profile.push(new THREE.Vector2(0, H - 20));
-    const fuji = new THREE.LatheGeometry(profile, 72).toNonIndexed();
-    fuji.translate(400, -40, 4300);
-    geos.push(colorize(fuji, -40, H, 0.6));
-    for (let i = 0; i < 40; i++) {
-      const ang = (i / 40) * Math.PI * 2 + rng() * 0.08;
-      const dist = 3000 + rng() * 800;
-      const h = 350 + rng() * 650;
-      const r = 700 + rng() * 600;
-      const g = new THREE.ConeGeometry(r, h, 14, 4, true).toNonIndexed();
-      const gp = g.attributes.position;
-      for (let k = 0; k < gp.count; k++) {
-        const x = gp.getX(k), yy = gp.getY(k), z = gp.getZ(k);
-        const top = yy > h / 2 - 1e-3;
-        const hv = Math.sin(Math.round(x) * 12.9898 + Math.round(yy) * 78.233 + Math.round(z) * 37.719 + i) * 43758.5453;
-        const j = top ? 0 : (hv - Math.floor(hv)) - 0.5;
-        gp.setX(k, x * (1 + j * 0.3));
-        gp.setZ(k, z * (1 + j * 0.3));
+    profile.push(new THREE.Vector2(0, H - 60));
+    const fuji = new THREE.LatheGeometry(profile, 128);
+    // gentle ridges down the flanks
+    const fp = fuji.attributes.position;
+    for (let k = 0; k < fp.count; k++) {
+      const x = fp.getX(k), y = fp.getY(k), z = fp.getZ(k);
+      const a = Math.atan2(z, x);
+      const f = 1 + Math.sin(a * 23) * 0.025 * (1 - y / H) + Math.sin(a * 7 + 1) * 0.03 * (1 - y / H);
+      fp.setX(k, x * f); fp.setZ(k, z * f);
+    }
+    fuji.translate(-2600, -80, 12800);
+    fuji.deleteAttribute('uv');
+    colorize(fuji, -80, H, 0.55);
+    fuji.computeVertexNormals();
+    const ring = this._farTerrainRing();
+    ring.computeVertexNormals();
+    // far mountains get the same height fog as everything else (aerial perspective)
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+    for (const g of [fuji, ring]) {
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = -2;
+      this.scene.add(mesh);
+    }
+  }
+
+  /**
+   * Far terrain: a polar grid from just outside the playable square out to
+   * 16 km, continuing the world's own relief (border ranges, coast) and
+   * rising into big ridged mountains. Vertex-coloured forest/rock/snow.
+   */
+  _farTerrainRing() {
+    const t = this.terrain;
+    const A = 480, Rn = 60;
+    const pos = [], col = [];
+    const c = new THREE.Color();
+    const forest = new THREE.Color('#2e4a33'), rock = new THREE.Color('#5d6470'), snow = new THREE.Color('#e4e9f2'), sea = new THREE.Color('#1d3d52');
+    const heightAt = (x, z, r0, r) => {
+      let h = t._rawHeight(x, z);
+      const grow = THREE.MathUtils.smoothstep(r, r0 + 200, r0 + 4500);
+      if (x < coastLine(z) - 300) h += grow * (ridgedFar(x / 2600, z / 2600) * 1700 + 150);
+      return h;
+    };
+    const grid = [];
+    for (let j = 0; j <= Rn; j++) {
+      const row = [];
+      for (let i = 0; i < A; i++) {
+        const a = (i / A) * Math.PI * 2;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const r0 = (WORLD_HALF + 30) / Math.max(Math.abs(ca), Math.abs(sa));
+        const f = j / Rn;
+        const r = r0 + (16000 - r0) * f * f;
+        const x = ca * r, z = sa * r;
+        row.push([x, heightAt(x, z, r0, r), z]);
       }
-      g.translate(0, h / 2 - 60, 0);
-      colorize(g, -60, h, 0.72);
-      g.translate(Math.cos(ang) * dist, 0, Math.sin(ang) * dist);
-      geos.push(g);
+      grid.push(row);
     }
-    const merged = mergeGeometries(geos.map((g) => { g.deleteAttribute('uv'); return g; }));
-    merged.computeVertexNormals();
-    const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
-    this.scene.add(mesh);
+    const idx = [];
+    for (let j = 0; j <= Rn; j++) {
+      for (let i = 0; i < A; i++) {
+        const v = grid[j][i];
+        pos.push(v[0], v[1], v[2]);
+        const h = v[1];
+        if (h < SEA_LEVEL + 1) c.copy(sea);
+        else if (h > 950) c.copy(snow);
+        else c.copy(forest).lerp(rock, THREE.MathUtils.smoothstep(h, 250, 950));
+        col.push(c.r, c.g, c.b);
+        if (j < Rn) {
+          const a0 = j * A + i, b0 = j * A + ((i + 1) % A), c0 = (j + 1) * A + i, d0 = (j + 1) * A + ((i + 1) % A);
+          idx.push(a0, c0, b0, b0, c0, d0);
+        }
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    return g;
   }
 
   // ------------------------------------------------------------- Petals
@@ -533,8 +701,16 @@ export class Environment {
     const dusk = THREE.MathUtils.smoothstep(-elevationDeg, -12, 2); // lamps on a bit before sunset
     const lamps = Math.max(n, dusk * 0.6);
     this.roads.lampMaterial.emissiveIntensity = 0.3 + lamps * 5;
-    this.city.setNight(lamps);
+    for (const c of this.cities) c.setNight(lamps);
+    this.landmarks.setNight(lamps);
+    this.water.setNight(n);
     if (this.gantryMat) this.gantryMat.emissiveIntensity = 1 + lamps * 2.5;
+    if (this.veg) {
+      const a = this.atmo;
+      const sunCol = a.sun.color.clone().multiplyScalar(a.sun.intensity * 0.3);
+      const imp = a.sun.color.clone().multiplyScalar(a.sun.intensity * 0.26).add(a.hemi.color.clone().multiplyScalar(a.hemi.intensity * 1.1));
+      this.veg.setLighting(a._lightDir || a.sunDir, sunCol, imp);
+    }
     this.night = n;
     this.lampLevel = lamps;
   }
@@ -548,7 +724,10 @@ export class Environment {
     this.time += dt;
     this.atmo.update(dt, camera, focus);
     this.atmo.updateEnvironment(dt);
+    this.terrain.update(camera.position);
     this.veg.update(dt, camera);
+    this.water.update(dt);
+    this.landmarks.update(dt);
     const pu = this.petals.material.uniforms;
     pu.uTime.value = this.time;
     pu.uCenter.value.copy(camera.position);
@@ -578,27 +757,56 @@ export class Environment {
         // map is drawn north-up and mirrored X to match the minimap
         const x = t.half - (ix + 0.5) * px, z = t.half - (iy + 0.5) * px;
         const h = t.heightAt(x, z);
+        const o = (iy * S + ix) * 4;
+        const wl = t.waterLevelAt(x, z);
+        if (wl != null && h < wl) {
+          const depth = Math.min(1, (wl - h) / 25);
+          img.data[o] = 28 - depth * 14; img.data[o + 1] = 78 - depth * 36; img.data[o + 2] = 108 - depth * 30; img.data[o + 3] = 255;
+          continue;
+        }
         t.normalAt(x, z, n);
         const shade = 0.55 + 0.6 * Math.max(0, n.dot(light));
         const forest = t.maskAt(x, z, 2);
-        let r = 58 - forest * 14, g = 84 - forest * 10, b = 52 - forest * 8;
+        let r = 58 - forest * 16, g = 84 - forest * 10, b = 52 - forest * 8;
+        const farm = t.mask2At(x, z, 1);
+        if (farm > 0.4) { r += (104 - r) * 0.45; g += (112 - g) * 0.45; b += (58 - b) * 0.45; }
+        if (t.mask2At(x, z, 0) > 0.4 && h < wl_or(t, x, z) + 3.5) { r = 196; g = 180; b = 138; }
         if (h > 150) { const k = Math.min(1, (h - 150) / 120); r += (120 - r) * k; g += (118 - g) * k; b += (116 - b) * k; }
         if (h > 230) { const k = Math.min(1, (h - 230) / 60); r += (225 - r) * k; g += (230 - g) * k; b += (238 - b) * k; }
         if (t.maskAt(x, z, 1) > 0.5) { r = 70; g = 72; b = 78; }
-        const o = (iy * S + ix) * 4;
         img.data[o] = r * shade; img.data[o + 1] = g * shade; img.data[o + 2] = b * shade; img.data[o + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
-    // city blocks
+    // town blocks and buildings
     const X = (x) => (t.half - x) / px, Y = (z) => (t.half - z) / px;
-    ctx.fillStyle = '#9a9aa2';
-    for (const b of this.city.blocks) ctx.fillRect(X(b.maxX), Y(b.maxZ), (b.maxX - b.minX) / px, (b.maxZ - b.minZ) / px);
-    ctx.fillStyle = '#c8c8d0';
-    for (const b of this.city.buildings) if (b.y < 1) ctx.fillRect(X(b.x + b.w / 2), Y(b.z + b.d / 2), b.w / px, b.d / px);
+    for (const city of this.cities) {
+      ctx.fillStyle = '#9a9aa2';
+      for (const b of city.blocks) ctx.fillRect(X(b.maxX), Y(b.maxZ), (b.maxX - b.minX) / px, (b.maxZ - b.minZ) / px);
+      ctx.fillStyle = '#c8c8d0';
+      for (const b of city.buildings) if (b.y < city.baseY + 1) ctx.fillRect(X(b.x + b.w / 2), Y(b.z + b.d / 2), Math.max(1, b.w / px), Math.max(1, b.d / px));
+    }
     this._mapCanvas = c;
     return c;
   }
+}
+
+function ridgedFar(x, z) {
+  let sum = 0, amp = 0.55, freq = 1, prev = 1;
+  for (let i = 0; i < 5; i++) {
+    const n = Math.sin(x * freq * 1.7 + Math.sin(z * freq * 1.3) * 1.9) * Math.cos(z * freq * 1.1 + Math.sin(x * freq * 0.9) * 1.7);
+    let r = 1 - Math.abs(n);
+    r *= r;
+    sum += r * amp * prev;
+    prev = r;
+    freq *= 2.07;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
+function wl_or(t, x, z) {
+  return t.waterLevelAt(x, z) ?? SEA_LEVEL;
 }
 
 /** Roadside billboard: two posts + a canvas-textured panel facing -Z. */

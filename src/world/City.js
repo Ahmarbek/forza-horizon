@@ -3,6 +3,11 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './Noise.js';
 import { CITY_RECT, CITY_STREET_STEP, CITY_STREET_WIDTH } from './Roads.js';
 
+const STYLE_PRESETS = {
+  downtown: { tall: 1, signs: 1, warehouses: 0 },
+  harbor: { tall: 0.12, signs: 0.45, warehouses: 1 },
+};
+
 /**
  * City.js
  * -------
@@ -20,12 +25,21 @@ const SIDEWALK = 5;
 const CURB_H = 0.18;
 
 export class City {
-  constructor(scene, physics, renderer) {
+  /**
+   * @param {object} opts { name, rect, step, streetWidth, baseY, seed, style ('downtown'|'harbor'), parks: block indices }
+   */
+  constructor(scene, physics, renderer, opts = {}) {
     this.scene = scene;
     this.physics = physics;
     this.renderer = renderer;
-    this.rect = CITY_RECT;
-    this.rng = mulberry32(4242);
+    this.name = opts.name ?? 'Neon City';
+    this.rect = opts.rect ?? CITY_RECT;
+    this.step = opts.step ?? CITY_STREET_STEP;
+    this.sw = opts.streetWidth ?? CITY_STREET_WIDTH;
+    this.baseY = opts.baseY ?? 0;
+    this.style = STYLE_PRESETS[opts.style ?? 'downtown'];
+    this.parkIdx = opts.parks ?? [9, 27, 46, 58];
+    this.rng = mulberry32(opts.seed ?? 4242);
     this.buildings = []; // {x,z,w,d,h,style}
     this.blocks = [];
     this.parks = [];
@@ -47,21 +61,20 @@ export class City {
   // ---------------------------------------------------------------- Layout
   _layoutBlocks() {
     const { minX, minZ, maxX, maxZ } = this.rect;
-    const hs = CITY_STREET_WIDTH / 2;
-    for (let x = minX; x < maxX - 1; x += CITY_STREET_STEP) {
-      for (let z = minZ; z < maxZ - 1; z += CITY_STREET_STEP) {
-        this.blocks.push({ minX: x + hs, maxX: x + CITY_STREET_STEP - hs, minZ: z + hs, maxZ: z + CITY_STREET_STEP - hs });
+    const hs = this.sw / 2;
+    for (let x = minX; x < maxX - 1; x += this.step) {
+      for (let z = minZ; z < maxZ - 1; z += this.step) {
+        this.blocks.push({ minX: x + hs, maxX: x + this.step - hs, minZ: z + hs, maxZ: z + this.step - hs });
       }
     }
     // a few blocks become parks
-    const parkIdx = [9, 27, 46, 58];
-    for (const i of parkIdx) if (this.blocks[i]) this.blocks[i].park = true;
+    for (const i of this.parkIdx) if (this.blocks[i]) this.blocks[i].park = true;
   }
 
   streetLines() {
     const xs = [], zs = [];
-    for (let x = this.rect.minX; x <= this.rect.maxX + 1; x += CITY_STREET_STEP) xs.push(x);
-    for (let z = this.rect.minZ; z <= this.rect.maxZ + 1; z += CITY_STREET_STEP) zs.push(z);
+    for (let x = this.rect.minX; x <= this.rect.maxX + 1; x += this.step) xs.push(x);
+    for (let z = this.rect.minZ; z <= this.rect.maxZ + 1; z += this.step) zs.push(z);
     return { xs, zs };
   }
 
@@ -78,7 +91,7 @@ export class City {
     ctx.clearRect(0, 0, c.width, c.height);
     const X = (x) => (x - (minX - pad)) * PX, Z = (z) => (z - (minZ - pad)) * PX;
     const { xs, zs } = this.streetLines();
-    const hs = CITY_STREET_WIDTH / 2;
+    const hs = this.sw / 2;
     ctx.fillStyle = 'rgba(240,240,232,0.95)';
     const dashH = (x0, x1, z) => { for (let x = x0; x < x1; x += 9) ctx.fillRect(X(x), Z(z) - 0.15 * PX, 4.5 * PX, 0.3 * PX); };
     const dashV = (z0, z1, x) => { for (let z = z0; z < z1; z += 9) ctx.fillRect(X(x) - 0.15 * PX, Z(z), 0.3 * PX, 4.5 * PX); };
@@ -134,7 +147,7 @@ export class City {
     };
     const g = new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2);
     const mesh = new THREE.Mesh(g, mat);
-    mesh.position.set(minX - pad + W / 2, 0.04, minZ - pad + D / 2);
+    mesh.position.set(minX - pad + W / 2, this.baseY + 0.04, minZ - pad + D / 2);
     mesh.receiveShadow = true;
     mesh.name = 'CityStreets';
     this.scene.add(mesh);
@@ -172,12 +185,12 @@ export class City {
       // world-scaled UVs (2 m tiles)
       const uv = g.attributes.uv, pos = g.attributes.position;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + w / 2) / 4, (pos.getZ(i) + d / 2) / 4 + pos.getY(i));
-      g.translate((b.minX + b.maxX) / 2, CURB_H / 2, (b.minZ + b.maxZ) / 2);
+      g.translate((b.minX + b.maxX) / 2, this.baseY + CURB_H / 2, (b.minZ + b.maxZ) / 2);
       geos.push(g);
-      this.physics.addStaticBox(new THREE.Vector3((b.minX + b.maxX) / 2, CURB_H / 2, (b.minZ + b.maxZ) / 2), new THREE.Vector3(w / 2, CURB_H / 2, d / 2), 0);
+      this.physics.addStaticBox(new THREE.Vector3((b.minX + b.maxX) / 2, this.baseY + CURB_H / 2, (b.minZ + b.maxZ) / 2), new THREE.Vector3(w / 2, CURB_H / 2, d / 2), 0);
       if (b.park) {
         const pg = new THREE.PlaneGeometry(w - SIDEWALK * 2, d - SIDEWALK * 2).rotateX(-Math.PI / 2);
-        pg.translate((b.minX + b.maxX) / 2, CURB_H + 0.01, (b.minZ + b.maxZ) / 2);
+        pg.translate((b.minX + b.maxX) / 2, this.baseY + CURB_H + 0.01, (b.minZ + b.maxZ) / 2);
         parkGeos.push(pg);
         this.parks.push(b);
       }
@@ -215,21 +228,27 @@ export class City {
       }
       const cx = (lot.minX + lot.maxX) / 2, cz = (lot.minZ + lot.maxZ) / 2;
       const dc = Math.hypot(cx - center.x, cz - center.z);
-      const downtown = Math.exp(-(dc * dc) / (330 * 330));
+      const downtown = Math.exp(-(dc * dc) / (330 * 330)) * this.style.tall;
       const setback = 1 + rng() * 2.5;
       const bw = w - setback * 2, bd = d - setback * 2;
       if (bw < 8 || bd < 8) return;
-      let h = 10 + rng() * 22 + downtown * (40 + rng() * 150);
+      const y0 = this.baseY + CURB_H;
+      // harbour: the blocks nearest the sea are warehouses and sheds
+      if (this.style.warehouses && cx > this.rect.maxX - this.step * 1.1 && rng() < 0.8) {
+        list.push({ x: cx, z: cz, w: bw, d: bd, h: 8 + rng() * 6, style: 4, y: y0 });
+        return;
+      }
+      let h = (10 + rng() * 22) * (this.style.tall < 1 ? 0.55 : 1) + downtown * (40 + rng() * 150);
       let style;
       if (h > 90) style = rng() < 0.7 ? 0 : 1; // glass tower / office
       else if (h > 40) style = rng() < 0.5 ? 1 : 2; // office / residential
       else style = rng() < 0.55 ? 3 : 2; // shop-house / residential
       h = Math.round(h / 3.6) * 3.6 + 1.2;
-      list.push({ x: cx, z: cz, w: bw, d: bd, h, style, y: CURB_H });
+      list.push({ x: cx, z: cz, w: bw, d: bd, h, style, y: y0 });
       // setback tier on towers
       if (h > 70 && rng() < 0.6) {
         const s = 0.6 + rng() * 0.2;
-        list.push({ x: cx, z: cz, w: bw * s, d: bd * s, h: h * (0.15 + rng() * 0.25), style, y: CURB_H + h });
+        list.push({ x: cx, z: cz, w: bw * s, d: bd * s, h: h * (0.15 + rng() * 0.25), style, y: y0 + h });
       }
     };
     for (const b of this.blocks) {
@@ -250,6 +269,7 @@ export class City {
       ['#b7b1a6', '#9c9892', '#c9c3b6', '#8c8a86'], // office stone
       ['#c8b49c', '#a89a8a', '#d6ccbc', '#9b8878', '#b9a58e'], // residential
       ['#d9d2c6', '#7d6f64', '#bfae97', '#6b5e57', '#e0d8cf'], // shop-house
+      ['#7f8d96', '#9a6b4f', '#5d7a8a', '#a5a9ad', '#8e4d3c'], // warehouse
     ];
     list.forEach((b, i) => {
       mesh.setMatrixAt(i, m.compose(p.set(b.x, b.y, b.z), q, s.set(b.w, b.h, b.d)));
@@ -258,6 +278,7 @@ export class City {
       style[i] = b.style;
       seed[i] = rng() * 100;
       this.physics.addStaticBox(p.set(b.x, b.y + b.h / 2, b.z), new THREE.Vector3(b.w / 2, b.h / 2, b.d / 2), 0);
+      b.top = b.y + b.h;
     });
     geo.setAttribute('aStyle', new THREE.InstancedBufferAttribute(style, 1));
     geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 1));
@@ -326,16 +347,16 @@ export class City {
             float u = abs(vBNrm.x) > 0.5 ? vBLocal.z : vBLocal.x;
             float v = vBLocal.y;
             int st = int(vBStyle + 0.5);
-            float floorH = st == 2 ? 3.0 : 3.6;
-            float colTarget = st == 0 ? 1.6 : (st == 1 ? 3.2 : (st == 2 ? 3.6 : 4.2));
+            float floorH = st == 2 ? 3.0 : (st == 4 ? 20.0 : 3.6);
+            float colTarget = st == 0 ? 1.6 : (st == 1 ? 3.2 : (st == 2 ? 3.6 : (st == 4 ? 6.0 : 4.2)));
             float cols = max(1.0, floor(faceW / colTarget + 0.5));
             float colW = faceW / cols;
             vec2 g = vec2(u / colW, v / floorH);
             vec2 cell = floor(g);
             vec2 f = fract(g);
-            float mx = st == 0 ? 0.04 : (st == 1 ? 0.14 : 0.22);
-            float my0 = st == 0 ? 0.06 : 0.28;
-            float my1 = st == 0 ? 0.96 : 0.84;
+            float mx = st == 0 ? 0.04 : (st == 1 ? 0.14 : (st == 4 ? 0.1 : 0.22));
+            float my0 = st == 0 ? 0.06 : (st == 4 ? (vBSize.y - 2.2) / floorH : 0.28);
+            float my1 = st == 0 ? 0.96 : (st == 4 ? (vBSize.y - 1.1) / floorH : 0.84);
             // anti-aliased window mask; fades to average coverage when tiny on screen
             vec2 fw = fwidth(g) * 1.2;
             float wx = smoothstep(mx - fw.x, mx + fw.x, f.x) * (1.0 - smoothstep(1.0 - mx - fw.x, 1.0 - mx + fw.x, f.x));
@@ -346,7 +367,7 @@ export class City {
             gFar = far;
             // storefronts on the ground floor
             float ground = 1.0 - step(4.4, v);
-            if (st >= 2) win = mix(win, step(0.05, f.x) * step(f.x, 0.95) * step(0.03, v / 4.4) * step(v / 4.4, 0.8), ground);
+            if (st >= 2 && st < 4) win = mix(win, step(0.05, f.x) * step(f.x, 0.95) * step(0.03, v / 4.4) * step(v / 4.4, 0.8), ground);
             // keep corners solid
             float edge = step(0.8, u) * step(u, faceW - 0.8);
             win *= edge * (1.0 - gRoof);
@@ -355,11 +376,17 @@ export class City {
             float r2 = bh(cell.yx * 1.7 + vec2(face, vBSeed));
             gWin = win;
             gGlassy = st == 0 ? 1.0 : 0.6;
-            gLit = mix(step(0.52, r), 0.45, gFar) * uNight + ground * uNight * step(2.5, vBStyle) * 1.5;
+            gLit = mix(step(0.52, r), 0.45, gFar) * uNight + ground * uNight * step(2.5, vBStyle) * step(vBStyle, 3.5) * 1.5;
             gLitCol = mix(vec3(1.0, 0.78, 0.5), vec3(0.75, 0.85, 1.0), step(0.8, r2));
             vec3 wall = diffuseColor.rgb;
             // horizontal banding on offices, subtle grime towards the base
             if (st == 1) wall *= 0.92 + 0.08 * step(0.85, fract(v / floorH));
+            if (st == 4) {
+              // corrugated cladding + a big roller door on each face
+              wall *= 0.86 + 0.14 * smoothstep(0.2, 0.8, abs(sin(u * 9.0)));
+              float door = step(abs(u - faceW * 0.5), min(3.2, faceW * 0.3)) * step(v, 5.2);
+              wall = mix(wall, vec3(0.32, 0.33, 0.34) * (0.9 + 0.1 * step(0.5, fract(v * 3.0))), door);
+            }
             vec3 glass = st == 0 ? vec3(0.08, 0.12, 0.16) : vec3(0.05, 0.06, 0.07);
             glass *= 0.8 + 0.4 * r2;
             vec3 c = mix(wall, glass, win);
@@ -435,7 +462,8 @@ export class City {
     };
     const blades = [], boards = [], bills = [];
     for (const b of this.buildings) {
-      if (b.y > 1) continue; // skip upper tiers
+      if (b.y > this.baseY + 1) continue; // skip upper tiers
+      if (b.style === 4) continue;
       // street-facing faces: pick the face closest to a street line
       const faces = [
         { nx: 1, nz: 0, px: b.x + b.w / 2, pz: b.z, len: b.d },
@@ -444,21 +472,21 @@ export class City {
         { nx: 0, nz: -1, px: b.x, pz: b.z - b.d / 2, len: b.w },
       ];
       for (const f of faces) {
-        if (b.style === 3 || (b.style === 2 && rng() < 0.3)) {
+        if ((b.style === 3 || (b.style === 2 && rng() < 0.3)) && rng() < this.style.signs + 0.2) {
           if (rng() < 0.75) {
             const along = (rng() - 0.5) * f.len * 0.6;
             const px = f.px + f.nx * 0.9 + (f.nz !== 0 ? along : 0), pz = f.pz + f.nz * 0.9 + (f.nx !== 0 ? along : 0);
-            blades.push({ x: px, z: pz, y: 6 + rng() * Math.min(10, b.h - 10), yaw: Math.atan2(f.nx, f.nz) + Math.PI / 2, cell: Math.floor(rng() * 8) * 2 });
+            blades.push({ x: px, z: pz, y: this.baseY + 6 + rng() * Math.max(0, Math.min(10, b.h - 10)), yaw: Math.atan2(f.nx, f.nz) + Math.PI / 2, cell: Math.floor(rng() * 8) * 2 });
           }
           if (rng() < 0.8) {
             const px = f.px + f.nx * 0.12, pz = f.pz + f.nz * 0.12;
-            boards.push({ x: px, z: pz, y: 4.6, yaw: Math.atan2(f.nx, f.nz), w: Math.min(f.len * 0.7, 14), cell: Math.floor(rng() * 8) * 2 + 1 });
+            boards.push({ x: px, z: pz, y: this.baseY + 4.6, yaw: Math.atan2(f.nx, f.nz), w: Math.min(f.len * 0.7, 14), cell: Math.floor(rng() * 8) * 2 + 1 });
           }
         }
       }
       if (b.h > 60 && rng() < 0.35) {
         const f = faces[Math.floor(rng() * 4)];
-        bills.push({ x: f.px + f.nx * 0.2, z: f.pz + f.nz * 0.2, y: b.h - 12, yaw: Math.atan2(f.nx, f.nz), w: Math.min(f.len * 0.8, 24), cell: Math.floor(rng() * 16) });
+        bills.push({ x: f.px + f.nx * 0.2, z: f.pz + f.nz * 0.2, y: this.baseY + b.h - 12, yaw: Math.atan2(f.nx, f.nz), w: Math.min(f.len * 0.8, 24), cell: Math.floor(rng() * 16) });
       }
     }
     const make = (list, w, h, dynamicW) => {
@@ -488,7 +516,7 @@ export class City {
   // -------------------------------------------------------- Street furniture
   _buildStreetFurniture() {
     const { xs, zs } = this.streetLines();
-    const hs = CITY_STREET_WIDTH / 2;
+    const hs = this.sw / 2;
     const { minX, minZ, maxX, maxZ } = this.rect;
     const lamps = [];
     const lights = [];
@@ -525,10 +553,10 @@ export class City {
     const up = new THREE.Vector3(0, 1, 0);
     L.forEach((l, i) => {
       q.setFromAxisAngle(up, l.yaw);
-      m.compose(p.set(l.x, CURB_H, l.z), q, s);
+      m.compose(p.set(l.x, this.baseY + CURB_H, l.z), q, s);
       poles.setMatrixAt(i, m);
       heads.setMatrixAt(i, m);
-      this.physics.addStaticCylinder(p.set(l.x, 0, l.z), 0.18, 4);
+      this.physics.addStaticCylinder(p.set(l.x, this.baseY, l.z), 0.18, 4);
     });
     poles.castShadow = true;
     poles.computeBoundingSphere();
@@ -551,14 +579,14 @@ export class City {
     const c = new THREE.Color();
     T.forEach((l, i) => {
       q.setFromAxisAngle(up, l.yaw);
-      m.compose(p.set(l.x, CURB_H, l.z), q, s);
+      m.compose(p.set(l.x, this.baseY + CURB_H, l.z), q, s);
       tl.setMatrixAt(i, m);
       const state = i % 3;
       const lensOff = new THREE.Vector3(0, 5.3 + (state === 0 ? 0.35 : state === 1 ? 0 : -0.35), 4.6 - 0.18).applyQuaternion(q);
       const lq = q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(up, Math.PI));
-      lens.setMatrixAt(i, new THREE.Matrix4().compose(p.set(l.x, CURB_H, l.z).add(lensOff), lq, s));
+      lens.setMatrixAt(i, new THREE.Matrix4().compose(p.set(l.x, this.baseY + CURB_H, l.z).add(lensOff), lq, s));
       lens.setColorAt(i, c.set(state === 0 ? '#ff2a1a' : state === 1 ? '#ffb000' : '#20ff70'));
-      this.physics.addStaticCylinder(p.set(l.x, 0, l.z), 0.16, 3);
+      this.physics.addStaticCylinder(p.set(l.x, this.baseY, l.z), 0.16, 3);
     });
     tl.castShadow = true;
     tl.computeBoundingSphere();

@@ -82,8 +82,10 @@ export class AIDriver {
     inp.steer = THREE.MathUtils.clamp((ang * 1.25) / v.steerLimit(speed), -1, 1);
 
     // --- Speed planning from curvature ahead
-    const decel = 8.5 * this.skill;
-    const mu = 1.05 * this.skill * ((v.preset.gripFront + v.preset.gripRear) / 2 / 1.25);
+    // loose surfaces: plan for less grip (rally tyres claw some back)
+    const loose = route.type === 'dirt' ? 0.76 + 0.2 * (v.preset.offroad ?? 0) : 1;
+    const decel = 8.5 * this.skill * loose;
+    const mu = 1.05 * this.skill * loose * ((v.preset.gripFront + v.preset.gripRear) / 2 / 1.25);
     const horizon = Math.min(260, 30 + (speed * speed) / (2 * decel));
     let target = v.preset.topSpeed;
     const win = Math.max(2, Math.round(12 / spacing));
@@ -99,6 +101,8 @@ export class AIDriver {
       if (vAllowed < target) target = vAllowed;
     }
     target *= this.rubber;
+    // open routes: pull over and stop at the end of the road
+    if (!route.closed && this.idx >= route.count - Math.round(40 / spacing)) target = 0;
 
     if (speed < target - 1.5) { inp.throttle = 1; inp.brake = 0; }
     else if (speed < target + 1) { inp.throttle = 0.35; inp.brake = 0; }

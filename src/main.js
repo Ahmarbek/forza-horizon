@@ -8,6 +8,7 @@ import { createPostProcessing } from './Shaders.js';
 import { AudioSystem } from './Audio.js';
 import { Progression } from './Progression.js';
 import { EventManager, StuntManager, AmbientTraffic, EVENTS } from './Events.js';
+import { Effects } from './Effects.js';
 
 /**
  * main.js
@@ -199,7 +200,7 @@ class App {
     r.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 6000);
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 20000);
 
     // ----------------------------------------------------------- Physics
     this.ui.setLoading(0.15, 'Initialising physics…');
@@ -223,6 +224,8 @@ class App {
     this.vehicle.setPaint(this.progression.selectedPaint);
     this.applyDrivingAids();
     this.vehicle.reset(this.env.startPosition, this.env.startYaw);
+
+    this.effects = new Effects(this.scene);
 
     this.cameraCtl = new CameraController(this.camera, {
       physics: this.physics,
@@ -367,7 +370,8 @@ class App {
       v.reset(pos, route.yaw(i));
     } else {
       const n = env.nearestRoad(p.x, p.z);
-      n.point.y = env.heightAt(n.point.x, n.point.z) + 1.2;
+      // route height wins on bridges (the ground may be a lake bed below)
+      n.point.y = Math.max(n.route ? n.point.y : -1e9, env.heightAt(n.point.x, n.point.z)) + 1.2;
       v.reset(n.point, n.yaw);
     }
     this.cameraCtl.snap(v);
@@ -604,6 +608,7 @@ class App {
     this.progression.setSetting('time', elevation);
     if (syncSlider) this.ui.setTimeSlider(elevation);
     const lamps = this.env.lampLevel ?? 0;
+    this.effects?.setLight(new THREE.Color(1, 1, 1).multiplyScalar(1 - (this.env.night ?? 0) * 0.8));
     this.vehicle?.setHeadlights(lamps);
     this.traffic?.setHeadlights(lamps);
   }
@@ -685,11 +690,35 @@ class App {
     this.events.updateVisuals(dt, alpha);
     this.traffic.updateVisuals(dt, alpha);
 
+    // tyre smoke, dust and skid marks for the player and nearby cars
+    const fxCars = this._fxCars || (this._fxCars = []);
+    fxCars.length = 0;
+    fxCars.push(v);
+    const addNear = (c) => { if (c !== v && c.root.position.distanceToSquared(v.root.position) < 140 * 140) fxCars.push(c); };
+    for (const r of this.events.racers) addNear(r.vehicle);
+    for (const c of this.traffic.cars) addNear(c.vehicle);
+    this.effects.setPixelScale(this.renderer.domElement.height, this.camera.fov);
+    this.effects.update(simulate ? dt : 0, simulate ? fxCars : []);
+
     if (v.impactEvent > 0) {
+      if (v.impactEvent > 6) this.effects.sparks(v.root.position, v.forward, v.impactEvent);
       this.cameraCtl.impact(Math.min(1, v.impactEvent / 12));
       this.audio.impact(v.impactEvent);
       if (this.state === STATE.GAMEPLAY) this.skills.crash(v.impactEvent);
       v.impactEvent = 0;
+    }
+
+    // Drove into deep water → splash, then back onto the nearest road
+    if (this.state === STATE.GAMEPLAY) {
+      const p = v.root.position;
+      const depth = this.env.waterDepthAt(p.x, p.y + 0.3, p.z);
+      this._wetTime = depth > 0.8 ? (this._wetTime || 0) + dt : 0;
+      if (this._wetTime > 0.7) {
+        this._wetTime = 0;
+        this.resetCar();
+        this.ui.toast('Splash! Back to the road');
+        this.skills.crash(10);
+      }
     }
 
     if (v.landEvent > 0) {
@@ -720,14 +749,7 @@ class App {
       this.ui.updateHUD(v);
       if (this.frame % 30 === 0) {
         const p = v.root.position;
-        let region = 'Countryside';
-        if (this.env.city.contains(p.x, p.z, 20)) region = 'Neon City';
-        else if (p.x > -420 && p.x < 620 && p.z > -480 && p.z < 380) region = 'Festival Site';
-        else {
-          const n = this.env.roads.nearest(p.x, p.z);
-          if (n.d2 < 60 * 60 && n.route.name) region = n.route.name;
-        }
-        this.ui.setRegion(region);
+        this.ui.setRegion(this.env.regionAt(p.x, p.z));
       }
       if (this.frame % 2 === 0) {
         this.ui.drawMinimap(v, this.env, this.events.markers() ?? { cars: this.traffic.positions(), checkpoint: null, freeRoam: true });
