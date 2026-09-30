@@ -763,6 +763,7 @@ export class Vegetation {
           uniform float uSea;
           uniform float uLake;
           varying float vTip;
+          varying float vFar;
           varying vec3 vGrassCol;
           ${TERRAIN_NOISE}
           float hAt(vec2 p) {
@@ -809,12 +810,14 @@ export class Vegetation {
           vTip = y;
           vGrassCol = mix(vec3(0.1, 0.19, 0.045), vec3(0.2, 0.28, 0.07), tfbm(wp * 0.0025));
           vGrassCol = mix(vGrassCol, vec3(0.34, 0.33, 0.16), smoothstep(0.55, 0.85, tfbm(wp * 0.03)) * 0.45);
-          vGrassCol *= 0.85 + 0.3 * aOff.z;
+          // per-blade variation fades with distance so far blades don't sparkle
+          vFar = smoothstep(uRadius * 0.2, uRadius * 0.65, dist);
+          vGrassCol *= mix(0.85 + 0.3 * aOff.z, 1.0, vFar);
           vGrassCol *= 1.0 - mk2.b * 0.3;`);
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vTip;\nvarying vec3 vGrassCol;')
+        .replace('#include <common>', '#include <common>\nvarying float vTip;\nvarying float vFar;\nvarying vec3 vGrassCol;')
         .replace('#include <color_fragment>', `#include <color_fragment>
-          diffuseColor.rgb *= vGrassCol * (0.85 + 0.45 * vTip);`)
+          diffuseColor.rgb *= vGrassCol * mix(0.85 + 0.45 * vTip, 1.02, vFar * 0.7);`)
         .replace('#include <normal_fragment_begin>',
           THREE.ShaderChunk.normal_fragment_begin.replace(/\bnormal \*= faceDirection;/g, ''));
     };

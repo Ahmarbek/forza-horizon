@@ -812,7 +812,11 @@ export class Terrain {
             col = mix(col, vec3(0.36, 0.36, 0.37), mask.g);
             // shade under trees (soft AO beyond the shadow range)
             col *= 1.0 - mask2.b * 0.38;
-            float fine = tnoise(p * 0.9) * 0.6 + tnoise(p * 3.1) * 0.4;
+            // fine mottling, each octave faded out before it aliases (metres per pixel vs frequency)
+            float fpx = max(length(dFdx(p)), length(dFdy(p)));
+            float oA = 1.0 - smoothstep(0.12, 0.4, fpx * 0.9);
+            float oB = 1.0 - smoothstep(0.12, 0.4, fpx * 3.1);
+            float fine = 0.5 + (tnoise(p * 0.9) - 0.5) * 0.6 * oA + (tnoise(p * 3.1) - 0.5) * 0.4 * oB;
             col *= 0.86 + 0.24 * fine;
             gBump = mix(grassT.a, rockT.a, rockW) * (1.0 - snowW) * (1.0 - mask.g) * (1.0 - sandW * 0.5);
             gTerrainRough = mix(mix(0.95, 0.82, rockW), 0.5, snowW);
@@ -826,9 +830,12 @@ export class Terrain {
             // detail bump: screen-space derivative of the texture height + macro noise
             vec2 p = vWPos.xz;
             float e = 0.35;
-            float h0 = tnoise(p * 0.9) + tnoise(p * 3.1) * 0.35;
-            float hx = tnoise((p + vec2(e, 0.0)) * 0.9) + tnoise((p + vec2(e, 0.0)) * 3.1) * 0.35;
-            float hz = tnoise((p + vec2(0.0, e)) * 0.9) + tnoise((p + vec2(0.0, e)) * 3.1) * 0.35;
+            float fpx = max(length(dFdx(p)), length(dFdy(p)));
+            float oA = 1.0 - smoothstep(0.1, 0.35, fpx * 0.9);
+            float oB = (1.0 - smoothstep(0.1, 0.35, fpx * 3.1)) * 0.35;
+            float h0 = tnoise(p * 0.9) * oA + tnoise(p * 3.1) * oB;
+            float hx = tnoise((p + vec2(e, 0.0)) * 0.9) * oA + tnoise((p + vec2(e, 0.0)) * 3.1) * oB;
+            float hz = tnoise((p + vec2(0.0, e)) * 0.9) * oA + tnoise((p + vec2(0.0, e)) * 3.1) * oB;
             vec3 bumpW = normalize(vec3(-(hx - h0) / e * 0.14, 1.0, -(hz - h0) / e * 0.14));
             vec3 bumpV = normalize((viewMatrix * vec4(bumpW - vec3(0.0, 1.0, 0.0), 0.0)).xyz);
             float fadeB = 1.0 - smoothstep(20.0, 140.0, length(vViewPosition));
