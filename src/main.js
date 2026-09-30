@@ -7,7 +7,8 @@ import { UI } from './UI.js';
 import { createPostProcessing } from './Shaders.js';
 import { AudioSystem } from './Audio.js';
 import { Progression } from './Progression.js';
-import { EventManager, StuntManager, AmbientTraffic, EVENTS } from './Events.js';
+import { EventManager, StuntManager, AmbientTraffic, EventBeacons, EVENTS, EVENT_KIND_LABEL } from './Events.js';
+import { RoadGraph } from './Navigation.js';
 import { Effects } from './Effects.js';
 
 /**
@@ -23,6 +24,12 @@ export const STATE = Object.freeze({
 });
 
 const FROZEN_INPUT = Object.freeze({ throttle: 0, brake: 0, steer: 0, handbrake: true });
+const QUALITY = {
+  ultra: { shadows: 4096, grass: 'high', resolution: 1, reflections: 'dynamic', bloom: true },
+  high: { shadows: 2048, grass: 'high', resolution: 1, reflections: 'dynamic', bloom: true },
+  medium: { shadows: 1024, grass: 'low', resolution: 0.85, reflections: 'sky', bloom: true },
+  low: { shadows: 0, grass: 'off', resolution: 0.75, reflections: 'sky', bloom: false },
+};
 const IDLE_INPUT = Object.freeze({ throttle: 0, brake: 0.4, steer: 0, handbrake: false });
 
 // ============================================================================
@@ -246,6 +253,12 @@ class App {
     this.stunts = new StuntManager(ctx);
     this.traffic = new AmbientTraffic(ctx);
     this.spawnTraffic();
+    this.beacons = new EventBeacons(this.scene, this.env);
+    this.ui.beacons = this.beacons.list;
+    this.nav = new RoadGraph(this.env);
+    this.waypoint = null;
+    this._gpsTimer = 0;
+    this.ui.setRedline(this.vehicle.drive.redline);
 
     this.progression.onChange((type, payload) => {
       if (type === 'levelup') {
@@ -266,6 +279,12 @@ class App {
     this.post.bloomPass.enabled = settings.bloom;
     this.post.blurEnabled = settings.blur;
     if (settings.shadows !== 2048) this.env.setShadowQuality(settings.shadows);
+    this._setupReflections(settings.reflections ?? 'dynamic');
+    if (!new URLSearchParams(location.search).has('nothumbs')) {
+      this.ui.setLoading(0.9, 'Photographing the events…');
+      await nextFrame();
+      this.ui.thumbs = this._eventThumbnails();
+    }
 
     // ---------------------------------------------------------- Events
     window.addEventListener('resize', () => this.onResize());
@@ -332,6 +351,7 @@ class App {
   }
 
   openMenu() {
+    this.ui.showPrompt(null);
     this.state = STATE.MENU;
     this.input.enabled = false;
     this.cameraCtl.setMode('showroom');
@@ -489,6 +509,7 @@ class App {
         if (this.events.active) { this.ui.toast("Can't swap cars during an event"); break; }
         if (prog.selectCar(data)) {
           this.vehicle.applyPreset(prog.selectedPreset, prog.selectedPaint);
+          this.ui.setRedline(this.vehicle.drive.redline);
           this.ui.renderGarage(prog);
           this.ui.updateProfile(prog);
           this.ui.toast(`${prog.selectedPreset.name} equipped`);
@@ -545,6 +566,37 @@ class App {
       case 'redraw-map':
         this.ui.drawWorldMap(this.vehicle, this.env, prog, EVENTS);
         break;
+      case 'map-waypoint':
+        this.setWaypoint({ x: data.x, z: data.z }, null);
+        this.ui.showMapInfo(`<div class="map-info__kind">WAYPOINT SET</div><div class="map-info__name">${this.env.regionAt(data.x, data.z)}</div>
+          <div class="map-info__sub">${this.ui.gpsPath ? `${this.ui.formatDistance(this.ui.gpsPath.length)} by road` : 'Off-road destination'}</div>
+          <button class="btn btn--small btn--ghost" data-action="clear-waypoint">Clear GPS</button>`);
+        this.ui.drawWorldMap(this.vehicle, this.env, prog, EVENTS);
+        this.audio.click();
+        break;
+      case 'map-event': {
+        const b = this.beacons.list.find((x) => x.ev.id === data);
+        if (!b) break;
+        const ev = b.ev;
+        const rec = prog.data.records[ev.id] || {};
+        const best = ev.type === 'race' ? (rec.bestPosition ? `Best finish: ${rec.bestPosition}${['th', 'st', 'nd', 'rd'][rec.bestPosition] || 'th'}` : 'Not raced yet') : rec.bestLap ? `Best lap ${rec.bestLap.toFixed(2)} s` : 'No time set';
+        this.ui.showMapInfo(`<div class="map-info__kind" style="color:${b.color}">${EVENT_KIND_LABEL(ev)}</div><div class="map-info__name">${ev.name}</div>
+          <div class="map-info__sub">${ev.desc}<br>${best}</div>
+          <button class="btn btn--small" data-action="start-event" data-arg="${ev.id}">Start event</button>
+          <button class="btn btn--small btn--ghost" data-action="set-route" data-arg="${ev.id}">Set GPS route</button>`);
+        this.audio.click();
+        break;
+      }
+      case 'set-route': {
+        const b = this.beacons.list.find((x) => x.ev.id === data);
+        if (b) { this.setWaypoint({ x: b.pos.x, z: b.pos.z }, b.ev.name); this.ui.toast(`GPS: ${b.ev.name}`); }
+        this.ui.drawWorldMap(this.vehicle, this.env, prog, EVENTS);
+        break;
+      }
+      case 'clear-waypoint':
+        this.setWaypoint(null);
+        this.ui.drawWorldMap(this.vehicle, this.env, prog, EVENTS);
+        break;
     }
   }
 
@@ -556,9 +608,19 @@ class App {
     v.manual = s.transmission === 'manual';
   }
 
-  onSetting(key, value) {
+  onSetting(key, value, fromPreset = false) {
     this.progression.setSetting(key, value);
+    if (!fromPreset && ['shadows', 'grass', 'resolution', 'reflections', 'bloom'].includes(key) && this.progression.settings.quality !== 'custom') {
+      this.progression.setSetting('quality', 'custom');
+      this.ui.applySettings(this.progression.settings);
+    }
     switch (key) {
+      case 'quality':
+        this.applyQuality(value);
+        break;
+      case 'reflections':
+        this._setupReflections(value);
+        break;
       case 'abs':
       case 'tcs':
       case 'stm':
@@ -611,6 +673,105 @@ class App {
     this.effects?.setLight(new THREE.Color(1, 1, 1).multiplyScalar(1 - (this.env.night ?? 0) * 0.8));
     this.vehicle?.setHeadlights(lamps);
     this.traffic?.setHeadlights(lamps);
+  }
+
+  /** Small photos of every event's start line for the event cards. */
+  _eventThumbnails() {
+    const out = {};
+    const r = this.renderer;
+    const W = 400, H = 225;
+    const cam = new THREE.PerspectiveCamera(55, W / H, 0.5, 20000);
+    const pr = r.getPixelRatio();
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const size = r.getSize(new THREE.Vector2());
+    const p = new THREE.Vector3(), q = new THREE.Vector3();
+    try {
+      for (const ev of EVENTS) {
+        const route = this.env.routes[ev.route];
+        if (out[ev.route]) continue;
+        route.point(route.startIndex - 30 / route.spacing, route.width * 0.25, p);
+        route.point(route.startIndex + 60 / route.spacing, 0, q);
+        cam.position.set(p.x, p.y + 6.5, p.z);
+        cam.lookAt(q.x, q.y + 2, q.z);
+        this.env.terrain.update(cam.position);
+        this.env.veg.update(0, cam);
+        r.setViewport(0, 0, W / pr, H / pr);
+        r.render(this.scene, cam);
+        ctx.drawImage(r.domElement, 0, r.domElement.height - H, W, H, 0, 0, W, H);
+        out[ev.route] = canvas.toDataURL('image/jpeg', 0.82);
+      }
+    } catch (err) {
+      console.warn('[Horizon] Event thumbnails unavailable', err);
+    }
+    r.setViewport(0, 0, size.x, size.y);
+    return out;
+  }
+
+  /** Dynamic car reflections: a small cube map around the player's car. */
+  _setupReflections(mode) {
+    this.reflections = mode;
+    const v = this.vehicle;
+    if (mode === 'dynamic' && !this.cubeRT) {
+      this.cubeRT = new THREE.WebGLCubeRenderTarget(128, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+      this.cubeCam = new THREE.CubeCamera(1, 1200, this.cubeRT);
+      this.scene.add(this.cubeCam);
+    }
+    const env = mode === 'dynamic' ? this.cubeRT.texture : null;
+    v.paintMaterial.envMap = env;
+    v.paintMaterial.needsUpdate = true;
+    this._cubeFrame = 0;
+  }
+
+  _updateReflections() {
+    if (this.reflections !== 'dynamic' || !this.cubeCam) return;
+    if ((this._cubeFrame++ % 4) !== 0) return;
+    const v = this.vehicle;
+    const r = this.renderer;
+    this.cubeCam.position.copy(v.root.position).y += 1.1;
+    const vis = v.root.visible;
+    v.root.visible = false;
+    v.contactShadow.visible = false;
+    const grass = this.env.veg.grass;
+    const gv = grass?.visible;
+    if (grass) grass.visible = false;
+    const auto = r.shadowMap.autoUpdate;
+    r.shadowMap.autoUpdate = false;
+    this.cubeCam.update(r, this.scene);
+    r.shadowMap.autoUpdate = auto;
+    if (grass) grass.visible = gv;
+    v.root.visible = vis;
+    v.contactShadow.visible = true;
+  }
+
+  applyQuality(level) {
+    const q = QUALITY[level];
+    if (!q) return;
+    for (const [k, v] of Object.entries(q)) this.onSetting(k, v, true);
+    this.ui.applySettings(this.progression.settings);
+  }
+
+  /** GPS: waypoint + road route, recomputed as the player drives. */
+  setWaypoint(wp, label) {
+    this.waypoint = wp;
+    this.waypointLabel = label;
+    this._gpsTimer = 0;
+    if (!wp) { this.ui.setGps(null, null); return; }
+    this._updateGps(true);
+  }
+
+  _updateGps(force = false) {
+    if (!this.waypoint) return;
+    const p = this.vehicle.root.position;
+    const d = Math.hypot(p.x - this.waypoint.x, p.z - this.waypoint.z);
+    if (d < 30 && !force) {
+      this.ui.toast(`Arrived${this.waypointLabel ? `: ${this.waypointLabel}` : ''}`);
+      this.setWaypoint(null);
+      return;
+    }
+    const path = this.nav.path(p.x, p.z, this.waypoint.x, this.waypoint.z);
+    this.ui.setGps(path, this.waypoint);
   }
 
   onResize() {
@@ -671,6 +832,9 @@ class App {
         if (input.consume('reset') && !this.events.freezePlayer) this.resetCar();
         if (input.consume('shiftUp') && this.vehicle.manual) this.vehicle.shift(1);
         if (input.consume('shiftDown') && this.vehicle.manual) this.vehicle.shift(-1);
+        const near = this._nearBeacon;
+        if (input.consume('interact') && near) this.startEvent(near.ev.id);
+        if (input.consume('map')) { this.openMenu(); this.ui.switchTab('map'); }
       }
     }
 
@@ -699,6 +863,11 @@ class App {
     for (const c of this.traffic.cars) addNear(c.vehicle);
     this.effects.setPixelScale(this.renderer.domElement.height, this.camera.fov);
     this.effects.update(simulate ? dt : 0, simulate ? fxCars : []);
+
+    if (v.backfireEvent) {
+      v.backfireEvent = false;
+      if (this.state === STATE.GAMEPLAY) { this.effects.backfire(v); this.audio.backfire(); }
+    }
 
     if (v.impactEvent > 0) {
       if (v.impactEvent > 6) this.effects.sparks(v.root.position, v.forward, v.impactEvent);
@@ -754,6 +923,11 @@ class App {
       if (this.frame % 2 === 0) {
         this.ui.drawMinimap(v, this.env, this.events.markers() ?? { cars: this.traffic.positions(), checkpoint: null, freeRoam: true });
       }
+      // event beacons: prompt when parked inside one
+      this._nearBeacon = !this.events.active && v.speedAbs < 12 ? this.beacons.near(v.root.position) : null;
+      this.ui.showPrompt(this._nearBeacon, this.input.usingGamepad);
+      this._gpsTimer -= dt;
+      if (this.waypoint && this._gpsTimer <= 0) { this._gpsTimer = 0.6; this._updateGps(); }
     }
     this.audio.update(v, this.state === STATE.GAMEPLAY);
 
@@ -766,6 +940,9 @@ class App {
 
 
     // ---- Render
+    this.beacons.setVisible(!this.events.active);
+    this.beacons.update(dt);
+    this._updateReflections();
     this.post.setSpeed(this.state === STATE.GAMEPLAY ? v.speedAbs / 80 : 0);
     this.post.render(dt);
   }

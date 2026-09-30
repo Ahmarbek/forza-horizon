@@ -1,6 +1,6 @@
 import { CAR_PRESETS, PAINT_COLORS, UPGRADE_TYPES, performanceIndex } from './Vehicle.js';
 import { xpForLevel } from './Progression.js';
-import { formatTime } from './Events.js';
+import { formatTime, EVENT_KIND_LABEL, EVENT_COLOR } from './Events.js';
 
 /**
  * UI.js
@@ -21,7 +21,19 @@ const MAX_RPM = 9000;
 const REDLINE = 7500;
 const MS_TO_MPH = 2.23694;
 const MS_TO_KMH = 3.6;
-const MINIMAP_RANGE = 200; // metres from centre to edge
+const MINIMAP_RANGE = 230; // metres from centre to edge
+const TIPS = [
+  'Hold the handbrake briefly to kick the rear out, then balance the drift on the throttle.',
+  'Grass, sand and snow have far less grip than tarmac — rally cars cope best off-road.',
+  'Drive into a glowing beacon and press ENTER (D-pad ↑) to start that event.',
+  'Open the map (TAB) and click anywhere to set a GPS waypoint.',
+  'Traction control and ABS can be switched off in Settings for more slide.',
+  'Manual gearbox: E / Q (gamepad B / X). Short-shift for traction in the wet… or in the gravel.',
+  'Speed traps and zones reward stars — beat all three for bonus credits.',
+  'Summit Road climbs above the snow line. Take it slow on the hairpins.',
+  'The Coastal Circuit is a 12 km lap past cliffs, beaches and paddy fields.',
+  'Engine upgrades raise top speed; tyre upgrades help everywhere.',
+];
 const STUNT_COLORS = { trap: '#2de2ff', zone: '#2de2ff', drift: '#b36bff', jump: '#ffd23f' };
 const STUNT_LABELS = { trap: 'SPEED TRAP', zone: 'SPEED ZONE', drift: 'DRIFT ZONE', jump: 'DANGER SIGN' };
 
@@ -56,7 +68,12 @@ export class UI {
       cameraLabel: $('camera-label'), backend: $('physics-backend'), fatal: $('fatal'),
       raceHud: $('race-hud'), countdown: $('countdown'), wrongWay: $('wrong-way'),
       zone: $('zone-meter'), stunt: $('stunt-banner'), results: $('results'), touchLayer: $('touch'),
+      prompt: $('prompt'), regionPop: $('region-pop'), north: $('minimap-north'), gps: $('gps'),
+      lightTcs: $('light-tcs'), lightAbs: $('light-abs'), lightBox: $('light-box'), raceBoard: $('race-board'),
+      mapWrap: $('map-wrap'), mapTip: $('map-tip'), mapInfo: $('map-info'), loaderTip: $('loader-tip'),
     };
+    this.map = { zoom: 1, cx: 0, cz: 0, dragging: false, moved: false, lastX: 0, lastY: 0, follow: true };
+    this.eventFilter = 'all';
     this.mmCtx = this.el.minimap.getContext('2d');
     this.mapCtx = this.el.worldMap.getContext('2d');
 
@@ -66,6 +83,7 @@ export class UI {
     this._buildTacho();
     this._buildSwatches();
     this._bindMenu();
+    this._bindMap();
     this._bindSettings();
     this._bindResults();
     this._bindTouch();
@@ -75,6 +93,8 @@ export class UI {
   setLoading(frac, text) {
     this.el.loaderFill.style.width = `${Math.round(frac * 100)}%`;
     if (text) this.el.loaderText.textContent = text;
+    const tip = Math.floor(frac * 3.2 + (this._tipSeed ??= Math.floor(Math.random() * TIPS.length))) % TIPS.length;
+    if (tip !== this._tip) { this._tip = tip; this.el.loaderTip.textContent = TIPS[tip]; }
   }
 
   hideLoader() {
@@ -114,6 +134,15 @@ export class UI {
   }
 
   // ================================================================= Tacho
+  /** Move the red band of the tacho to this car's redline. */
+  setRedline(rpm) {
+    this.redline = rpm;
+    const red = document.querySelector('.tacho__redline');
+    const redStart = ARC_LEN * (Math.min(rpm, MAX_RPM) / MAX_RPM);
+    red.setAttribute('stroke-dasharray', `0 ${redStart} ${ARC_LEN - redStart} ${CIRC}`);
+    this.el.ticks.querySelectorAll('.tacho__label').forEach((l, i) => l.setAttribute('fill', i * 1000 >= rpm - 400 ? '#ff2d8f' : 'rgba(255,255,255,0.8)'));
+  }
+
   _buildTacho() {
     const ns = 'http://www.w3.org/2000/svg';
     const track = document.querySelector('.tacho__track');
@@ -173,7 +202,7 @@ export class UI {
       this.el.rpmArc.setAttribute('stroke-dasharray', `${ARC_LEN * frac} ${CIRC}`);
       this.el.tacho.style.setProperty('--rpm', frac.toFixed(3));
       this.el.rpmReadout.textContent = `${rpm} RPM`;
-      const red = rpm >= REDLINE;
+      const red = rpm >= (this.redline ?? REDLINE) - 250;
       if (red !== L.redline) {
         L.redline = red;
         this.el.rpmArc.classList.toggle('is-redline', red);
@@ -183,6 +212,13 @@ export class UI {
       L.hb = vehicle.handbrake;
       this.el.handbrake.classList.toggle('is-on', L.hb);
     }
+    const tcs = vehicle.tcsActive, abs = vehicle.absActive;
+    if (tcs !== L.tcs) { L.tcs = tcs; this.el.lightTcs.classList.toggle('is-on', tcs); }
+    if (abs !== L.abs) { L.abs = abs; this.el.lightAbs.classList.toggle('is-on', abs); }
+    const box = vehicle.manual ? 'MANUAL' : 'AUTO';
+    if (box !== L.box) { L.box = box; this.el.lightBox.textContent = box; }
+    this.el.lightTcs.classList.toggle('is-off', !vehicle.assists.tcs);
+    this.el.lightAbs.classList.toggle('is-off', !vehicle.assists.abs);
   }
 
   setUnits(units) {
@@ -213,6 +249,19 @@ export class UI {
   }
 
   // =============================================================== Minimap
+  /** GPS route (Float32Array x,z pairs) + remaining distance in metres, or null. */
+  setGps(path, waypoint) {
+    this.gpsPath = path;
+    this.waypoint = waypoint;
+    const txt = waypoint && path ? `GPS ${this.formatDistance(path.length)}` : '';
+    if (txt !== this._last.gps) { this._last.gps = txt; this.el.gps.textContent = txt; this.el.gps.classList.toggle('is-on', !!txt); }
+  }
+
+  formatDistance(m) {
+    if (this.units === 'mph') return m > 400 ? `${(m / 1609).toFixed(1)} mi` : `${Math.round(m * 1.094 / 10) * 10} yd`;
+    return m > 900 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 10) * 10} m`;
+  }
+
   drawMinimap(vehicle, env, markers) {
     const ctx = this.mmCtx;
     const W = this.el.minimap.width;
@@ -235,14 +284,19 @@ export class UI {
     ctx.scale(-scale, -scale);
     ctx.translate(-p.x, -p.z);
 
-    // city blocks
-    const city = env.city;
-    if (city.contains(p.x, p.z, view)) {
-      ctx.fillStyle = 'rgba(60,64,76,0.9)';
-      const r = city.rect;
-      ctx.fillRect(r.minX - 9, r.minZ - 9, r.maxX - r.minX + 18, r.maxZ - r.minZ + 18);
-      ctx.fillStyle = 'rgba(28,30,38,0.95)';
-      for (const b of city.blocks) ctx.fillRect(b.minX, b.minZ, b.maxX - b.minX, b.maxZ - b.minZ);
+    // terrain / water / towns from the pre-rendered map image (dimmed)
+    const img = env.mapCanvas();
+    const t = env.terrain;
+    const px = t.size / img.width;
+    const u0 = Math.max(0, Math.floor((t.half - (p.x + view)) / px)), v0 = Math.max(0, Math.floor((t.half - (p.z + view)) / px));
+    const u1 = Math.min(img.width, Math.ceil((t.half - (p.x - view)) / px)), v1 = Math.min(img.height, Math.ceil((t.half - (p.z - view)) / px));
+    if (u1 > u0 && v1 > v0) {
+      ctx.save();
+      ctx.translate(t.half, t.half);
+      ctx.scale(-px, -px);
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(img, u0, v0, u1 - u0, v1 - v0, u0, v0, u1 - u0, v1 - v0);
+      ctx.restore();
     }
     // roads
     ctx.lineJoin = 'round';
@@ -258,20 +312,41 @@ export class UI {
       }
       if (r.closed && pen) ctx.lineTo(r.xs[0], r.zs[0]);
     };
+    for (const city of env.cities) {
+      if (!city.contains(p.x, p.z, view)) continue;
+      ctx.fillStyle = 'rgba(58,62,74,0.95)';
+      const r = city.rect;
+      ctx.fillRect(r.minX - 9, r.minZ - 9, r.maxX - r.minX + 18, r.maxZ - r.minZ + 18);
+      ctx.fillStyle = 'rgba(24,26,34,0.95)';
+      for (const b of city.blocks) ctx.fillRect(b.minX, b.minZ, b.maxX - b.minX, b.maxZ - b.minZ);
+    }
     for (const r of env.roads.all) {
       if (!r.render) continue;
       trace(r, 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.strokeStyle = r.type === 'dirt' ? 'rgba(210,180,130,0.8)' : 'rgba(255,255,255,0.85)';
       ctx.lineWidth = r.width + 5;
       ctx.stroke();
-      ctx.strokeStyle = '#3d4250';
+      ctx.strokeStyle = r.type === 'dirt' ? '#5a4a36' : '#3d4250';
       ctx.lineWidth = r.width;
+      ctx.stroke();
+    }
+    // GPS line
+    if (this.gpsPath && this.waypoint && !racing) {
+      const pts = this.gpsPath.points;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < pts.length; i += 2) {
+        const near = Math.abs(pts[i] - p.x) < view && Math.abs(pts[i + 1] - p.z) < view;
+        if (near) { if (pen) ctx.lineTo(pts[i], pts[i + 1]); else ctx.moveTo(pts[i], pts[i + 1]); pen = true; } else pen = false;
+      }
+      ctx.strokeStyle = 'rgba(45,226,255,0.95)';
+      ctx.lineWidth = 7;
       ctx.stroke();
     }
     if (racing && markers.route) {
       trace(markers.route, 2);
       ctx.strokeStyle = 'rgba(255,45,143,0.95)';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 5;
       ctx.stroke();
     }
 
@@ -284,23 +359,28 @@ export class UI {
         if (Math.abs(pos.x - p.x) > view || Math.abs(pos.z - p.z) > view) continue;
         ctx.fillStyle = STUNT_COLORS[st.type];
         ctx.beginPath();
-        ctx.arc(pos.x, pos.z, 6, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.z, 7, 0, Math.PI * 2);
         ctx.fill();
       }
+      for (const b of this.beacons || []) {
+        if (Math.abs(b.pos.x - p.x) > view || Math.abs(b.pos.z - p.z) > view) continue;
+        this._flag(ctx, b.pos.x, b.pos.z, b.color, 1 / scale, yaw);
+      }
+      if (this.waypoint) this._pin(ctx, this.waypoint.x, this.waypoint.z, 1 / scale, yaw);
     }
     if (markers) {
       if (markers.checkpoint) {
         const c = markers.checkpoint;
         ctx.strokeStyle = '#ffd23f';
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.arc(c.x, c.z, 10, 0, Math.PI * 2);
+        ctx.arc(c.x, c.z, 11, 0, Math.PI * 2);
         ctx.stroke();
       }
-      ctx.fillStyle = racing ? '#ff4d5e' : 'rgba(255,255,255,0.85)';
+      ctx.fillStyle = racing ? '#ff4d5e' : 'rgba(255,255,255,0.9)';
       for (const c of markers.cars) {
         ctx.beginPath();
-        ctx.arc(c.x, c.z, 4.5, 0, Math.PI * 2);
+        ctx.arc(c.x, c.z, 5, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -320,6 +400,139 @@ export class UI {
     ctx.fill();
     ctx.stroke();
     ctx.restore();
+
+    // north marker orbits the ring as the map turns
+    const r = this.el.minimap.clientWidth / 2 + 2;
+    const a = yaw + Math.PI;
+    this.el.north.style.transform = `translate(${(-Math.sin(a) * r).toFixed(1)}px, ${(Math.cos(a) * r).toFixed(1)}px)`;
+  }
+
+  _flag(ctx, x, z, color, k, yaw) {
+    ctx.save();
+    ctx.translate(x, z);
+    ctx.rotate(-yaw);
+    ctx.scale(-k, -k);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-5, 8); ctx.lineTo(-5, -10); ctx.lineTo(8, -5); ctx.lineTo(-5, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _pin(ctx, x, z, k, yaw) {
+    ctx.save();
+    ctx.translate(x, z);
+    ctx.rotate(-yaw);
+    ctx.scale(-k, -k);
+    ctx.fillStyle = '#2de2ff';
+    ctx.strokeStyle = '#001a22';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, -9, 7, Math.PI, 0);
+    ctx.lineTo(0, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ============================================================ World map
+  _bindMap() {
+    const c = this.el.worldMap;
+    const M = this.map;
+    const toWorld = (ev) => {
+      const r = c.getBoundingClientRect();
+      const f = this._mapXform;
+      if (!f) return null;
+      const sx = (ev.clientX - r.left) * f.dpr, sy = (ev.clientY - r.top) * f.dpr;
+      return { x: f.cx - (sx - f.W / 2) / f.s, z: f.cz - (sy - f.H / 2) / f.s, sx, sy };
+    };
+    c.addEventListener('pointerdown', (e) => {
+      M.dragging = true; M.moved = false; M.lastX = e.clientX; M.lastY = e.clientY;
+      c.setPointerCapture?.(e.pointerId);
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (M.dragging) {
+        const dx = e.clientX - M.lastX, dy = e.clientY - M.lastY;
+        if (Math.abs(dx) + Math.abs(dy) > 3) M.moved = true;
+        if (M.moved && this._mapXform) {
+          const f = this._mapXform;
+          M.cx += (dx * f.dpr) / f.s; M.cz += (dy * f.dpr) / f.s; M.follow = false;
+          M.lastX = e.clientX; M.lastY = e.clientY;
+          this.cb.onAction('redraw-map');
+        }
+        return;
+      }
+      const w = toWorld(e);
+      if (w) this._mapHover(w);
+    });
+    const up = (e) => {
+      if (!M.dragging) return;
+      M.dragging = false;
+      if (M.moved) return;
+      const w = toWorld(e);
+      if (!w) return;
+      const hit = this._mapHit(w);
+      if (hit && hit.kind === 'event') this.cb.onAction('map-event', hit.id);
+      else this.cb.onAction('map-waypoint', { x: w.x, z: w.z });
+    };
+    c.addEventListener('pointerup', up);
+    c.addEventListener('pointercancel', () => { M.dragging = false; });
+    c.addEventListener('pointerleave', () => { this.el.mapTip.hidden = true; });
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.zoomMap(e.deltaY < 0 ? 1.25 : 0.8, toWorld(e));
+    }, { passive: false });
+    this.el.mapWrap.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.map;
+      if (k === 'in') this.zoomMap(1.4);
+      else if (k === 'out') this.zoomMap(1 / 1.4);
+      else { M.follow = true; M.zoom = 1; this.cb.onAction('redraw-map'); }
+    }));
+  }
+
+  zoomMap(f, at) {
+    const M = this.map;
+    const z0 = M.zoom;
+    M.zoom = Math.min(8, Math.max(1, M.zoom * f));
+    if (at && this._mapXform) {
+      // keep the point under the cursor fixed
+      const k = 1 - z0 / M.zoom;
+      M.cx += (at.x - M.cx) * k; M.cz += (at.z - M.cz) * k; M.follow = false;
+    }
+    this.cb.onAction('redraw-map');
+  }
+
+  _mapHit(w) {
+    const f = this._mapXform;
+    if (!f) return null;
+    const R = 14 * f.dpr / f.s;
+    let best = null, bd = R * R;
+    for (const h of this._mapHits || []) {
+      const d = (h.x - w.x) ** 2 + (h.z - w.z) ** 2;
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+
+  _mapHover(w) {
+    const hit = this._mapHit(w);
+    const tip = this.el.mapTip;
+    if (!hit) { tip.hidden = true; this.el.worldMap.style.cursor = 'crosshair'; return; }
+    this.el.worldMap.style.cursor = 'pointer';
+    tip.hidden = false;
+    tip.innerHTML = `<b>${hit.title}</b><span>${hit.sub}</span>`;
+    tip.style.left = `${w.sx / this._mapXform.dpr + 14}px`;
+    tip.style.top = `${w.sy / this._mapXform.dpr + 10}px`;
+  }
+
+  /** Details panel next to the map (selected event or waypoint). */
+  showMapInfo(html) {
+    this.el.mapInfo.innerHTML = html;
   }
 
   drawWorldMap(vehicle, env, progression, events) {
@@ -331,70 +544,69 @@ export class UI {
     const ctx = this.mapCtx;
     const W = canvas.width, H = canvas.height;
     const b = env.mapBounds;
-    const pad = 16 * dpr;
-    const s = Math.min((W - pad * 2) / (b.maxX - b.minX), (H - pad * 2) / (b.maxZ - b.minZ));
-    const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+    const M = this.map;
+    const p = vehicle.root.position;
+    const base = Math.min((W - 24 * dpr) / (b.maxX - b.minX), (H - 24 * dpr) / (b.maxZ - b.minZ));
+    const s = base * M.zoom;
+    if (M.follow) {
+      M.cx = M.zoom > 1.01 ? p.x : (b.minX + b.maxX) / 2;
+      M.cz = M.zoom > 1.01 ? p.z : (b.minZ + b.maxZ) / 2;
+    }
+    // keep the view on the map
+    const hx = W / 2 / s, hz = H / 2 / s;
+    M.cx = Math.min(b.maxX - Math.min(hx, (b.maxX - b.minX) / 2), Math.max(b.minX + Math.min(hx, (b.maxX - b.minX) / 2), M.cx));
+    M.cz = Math.min(b.maxZ - Math.min(hz, (b.maxZ - b.minZ) / 2), Math.max(b.minZ + Math.min(hz, (b.maxZ - b.minZ) / 2), M.cz));
+    const cx = M.cx, cz = M.cz;
+    this._mapXform = { cx, cz, s, W, H, dpr };
     const X = (x) => W / 2 - (x - cx) * s; // mirrored like the minimap
     const Y = (z) => H / 2 - (z - cz) * s;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#0c1210';
+    ctx.fillStyle = '#10222e';
     ctx.fillRect(0, 0, W, H);
     const img = env.mapCanvas();
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(img, X(b.maxX), Y(b.maxZ), (b.maxX - b.minX) * s, (b.maxZ - b.minZ) * s);
 
     ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     for (const r of env.roads.all) {
       if (!r.render) continue;
       ctx.beginPath();
       ctx.moveTo(X(r.xs[0]), Y(r.zs[0]));
-      for (let i = 3; i < r.count; i += 3) ctx.lineTo(X(r.xs[i]), Y(r.zs[i]));
+      const step = M.zoom > 3 ? 1 : 3;
+      for (let i = step; i < r.count; i += step) ctx.lineTo(X(r.xs[i]), Y(r.zs[i]));
       if (r.closed) ctx.closePath();
-      ctx.strokeStyle = r.type === 'highway' ? '#ffd23f' : '#f2f2f2';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = Math.max(3.5 * dpr, r.width * s * 1.4 + 2 * dpr);
+      ctx.stroke();
+      ctx.strokeStyle = r.type === 'highway' ? '#ffd23f' : r.type === 'dirt' ? '#d8b98a' : '#f2f2f2';
       ctx.lineWidth = Math.max(2 * dpr, r.width * s * 1.4);
       ctx.stroke();
     }
-    const city = env.city.rect;
-    ctx.strokeStyle = 'rgba(255,45,143,0.8)';
-    ctx.lineWidth = 2 * dpr;
-    ctx.strokeRect(X(city.maxX), Y(city.maxZ), (city.maxX - city.minX) * s, (city.maxZ - city.minZ) * s);
-
-    const label = (text, x, z, color = '#fff', size = 15) => {
-      ctx.font = `800 ${size * dpr}px "Barlow Condensed", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 4 * dpr;
-      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-      ctx.strokeText(text, X(x), Y(z));
-      ctx.fillStyle = color;
-      ctx.fillText(text, X(x), Y(z));
-    };
-    label('NEON CITY', (city.minX + city.maxX) / 2, city.maxZ + 40, '#ff7ab8', 18);
-    label('FESTIVAL SITE', 200, 330, '#ff7ab8', 16);
-    label('FUJI PASS', -780, -640, '#ffffff', 15);
-    label('HORIZON HIGHWAY', 1000, 300, '#ffd23f', 14);
-
-    // race starts
-    if (events) {
-      const seen = new Set();
-      for (const ev of events) {
-        const r = env.routes[ev.route];
-        if (seen.has(r)) continue;
-        seen.add(r);
-        const x = X(r.xs[r.startIndex]), y = Y(r.zs[r.startIndex]);
-        ctx.fillStyle = '#ff2d8f';
-        ctx.beginPath();
-        ctx.moveTo(x, y); ctx.lineTo(x, y - 16 * dpr); ctx.lineTo(x + 11 * dpr, y - 11 * dpr); ctx.lineTo(x, y - 7 * dpr);
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 16 * dpr); ctx.stroke();
-      }
+    for (const city of env.cities) {
+      const R = city.rect;
+      ctx.strokeStyle = 'rgba(255,45,143,0.8)';
+      ctx.lineWidth = 2 * dpr;
+      ctx.strokeRect(X(R.maxX), Y(R.maxZ), (R.maxX - R.minX) * s, (R.maxZ - R.minZ) * s);
     }
+    // GPS
+    if (this.gpsPath && this.waypoint) {
+      const pts = this.gpsPath.points;
+      ctx.beginPath();
+      ctx.moveTo(X(pts[0]), Y(pts[1]));
+      for (let i = 2; i < pts.length; i += 2) ctx.lineTo(X(pts[i]), Y(pts[i + 1]));
+      ctx.strokeStyle = 'rgba(45,226,255,0.95)';
+      ctx.lineWidth = 4 * dpr;
+      ctx.stroke();
+    }
+
+    const hits = [];
     // PR stunts with star ratings
-    ctx.textAlign = 'center';
     for (const st of env.stunts) {
       const pos = st.type === 'jump' ? st.ramp : { x: st.route.xs[st.index], z: st.route.zs[st.index] };
       const x = X(pos.x), y = Y(pos.z);
+      if (x < -20 || y < -20 || x > W + 20 || y > H + 20) continue;
       ctx.fillStyle = STUNT_COLORS[st.type];
       ctx.beginPath();
       ctx.arc(x, y, 5.5 * dpr, 0, Math.PI * 2);
@@ -403,12 +615,52 @@ export class UI {
       ctx.lineWidth = 2;
       ctx.stroke();
       const rec = progression?.data.stunts[st.id];
-      ctx.fillStyle = '#ffd23f';
-      ctx.font = `700 ${11 * dpr}px "Barlow Condensed", sans-serif`;
-      ctx.fillText('★'.repeat(rec?.stars || 0) + '☆'.repeat(3 - (rec?.stars || 0)), x, y + 16 * dpr);
+      if (M.zoom > 1.6) {
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = `700 ${11 * dpr}px "Barlow Condensed", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText('★'.repeat(rec?.stars || 0) + '☆'.repeat(3 - (rec?.stars || 0)), x, y + 16 * dpr);
+      }
+      hits.push({ kind: 'stunt', x: pos.x, z: pos.z, title: st.name, sub: `${STUNT_LABELS[st.type]} · ${rec?.stars || 0}/3 ★` });
+    }
+    // events
+    for (const bcn of this.beacons || []) {
+      const x = X(bcn.pos.x), y = Y(bcn.pos.z);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(dpr * 1.3, dpr * 1.3);
+      ctx.fillStyle = bcn.color;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#111';
+      ctx.beginPath();
+      ctx.moveTo(-3, 5); ctx.lineTo(-3, -5); ctx.lineTo(5, -2); ctx.lineTo(-3, 1);
+      ctx.fill();
+      ctx.restore();
+      const rec = progression?.data.records[bcn.ev.id];
+      hits.push({ kind: 'event', id: bcn.ev.id, x: bcn.pos.x, z: bcn.pos.z, title: bcn.ev.name, sub: `${EVENT_KIND_LABEL(bcn.ev)} · ${rec?.wins ? `${rec.wins} win${rec.wins > 1 ? 's' : ''}` : rec?.bestLap ? 'Completed' : 'New'}` });
+    }
+    this._mapHits = hits;
+    if (this.waypoint) {
+      ctx.save();
+      ctx.translate(X(this.waypoint.x), Y(this.waypoint.z));
+      ctx.scale(dpr * 1.4, dpr * 1.4);
+      ctx.fillStyle = '#2de2ff';
+      ctx.strokeStyle = '#001a22';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, -10, 7, Math.PI, 0);
+      ctx.lineTo(0, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
     }
 
-    const p = vehicle.root.position;
     const yaw = Math.atan2(vehicle.forward.x, vehicle.forward.z);
     ctx.save();
     ctx.translate(X(p.x), Y(p.z));
@@ -426,10 +678,51 @@ export class UI {
     ctx.stroke();
     ctx.restore();
 
+    // place names last, most important first, skipping any that would collide
+    const taken = [];
+    const box = (x, y, w, h) => ({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2 });
+    const clash = (a) => taken.some((b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0);
+    for (const bcn of this.beacons || []) taken.push(box(X(bcn.pos.x), Y(bcn.pos.z), 22 * dpr, 22 * dpr));
+    taken.push(box(X(p.x), Y(p.z), 26 * dpr, 26 * dpr));
+    const ls = Math.min(22, 12 + M.zoom * 2);
+    const names = [
+      ['NEON CITY', (env.city.rect.minX + env.city.rect.maxX) / 2, env.city.rect.maxZ + 60, '#ff7ab8', ls + 3],
+      ['SEA OF SAKURA', 3650, 1500, '#8fd3ff', ls + 2],
+      ['FESTIVAL SITE', 200, 330, '#ff7ab8', ls + 1],
+      ['FUJI PASS', -780, -640, '#ffffff', ls],
+      ['KISO FOREST', -2800, 300, '#b6ff3b', ls],
+      ['SUMMIT', -1650, -2950, '#ffffff', ls],
+      ['HORIZON HIGHWAY', 1000, 300, '#ffd23f', ls - 1],
+      ...(env.labels || []).map((l) => [l.text, l.x, l.z, '#ffe8a3', ls - 2]),
+    ];
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 4 * dpr;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    for (const [text, x, z, color, size] of names) {
+      ctx.font = `800 ${size * dpr}px "Barlow Condensed", sans-serif`;
+      const w = ctx.measureText(text).width + 8 * dpr, h = size * dpr * 1.15;
+      const px = X(x), py = Y(z);
+      if (px < -w || py < -h || px > W + w || py > H + h) continue;
+      const at = [0, -h, h].map((dy) => box(px, py + dy, w, h)).find((b) => !clash(b));
+      if (!at) continue;
+      taken.push(at);
+      const ty = (at.y0 + at.y1) / 2;
+      ctx.strokeText(text, px, ty);
+      ctx.fillStyle = color;
+      ctx.fillText(text, px, ty);
+    }
+    ctx.textBaseline = 'alphabetic';
+
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'left';
     ctx.font = `800 ${20 * dpr}px "Barlow Condensed", sans-serif`;
-    ctx.fillText('N ↑', W - 60 * dpr, 34 * dpr);
+    ctx.fillText('N ↑', 20 * dpr, 34 * dpr);
+    // scale bar
+    const bar = M.zoom > 3 ? 250 : 1000;
+    ctx.fillRect(20 * dpr, H - 60 * dpr, bar * s, 3 * dpr);
+    ctx.font = `700 ${13 * dpr}px "Barlow Condensed", sans-serif`;
+    ctx.fillText(bar >= 1000 ? '1 km' : `${bar} m`, 20 * dpr, H - 66 * dpr);
   }
 
   // ========================================================== Skill chain
@@ -493,8 +786,33 @@ export class UI {
 
   setRegion(text) {
     if (this._last.region === text) return;
+    const first = this._last.region == null;
     this._last.region = text;
     this.$('banner-sub').textContent = `Free Roam · ${text}`;
+    this.$('resume-sub').textContent = `Back to ${text}`;
+    // big "entering" card for named areas (not plain roads/countryside)
+    if (!first && !/Road|Highway|Loop|Countryside|Lane|Trail/.test(text)) {
+      this.$('region-pop-name').textContent = text;
+      const pop = this.el.regionPop;
+      pop.classList.remove('is-on');
+      void pop.offsetWidth;
+      pop.classList.add('is-on');
+    }
+  }
+
+  /** Event prompt when parked in a beacon (null hides it). */
+  showPrompt(beacon, usingPad) {
+    const id = beacon ? beacon.ev.id : null;
+    if (id === this._last.prompt) return;
+    this._last.prompt = id;
+    this.el.prompt.classList.toggle('is-on', !!beacon);
+    if (!beacon) return;
+    const ev = beacon.ev;
+    this.$('prompt-kind').textContent = EVENT_KIND_LABEL(ev);
+    this.$('prompt-kind').style.background = beacon.color;
+    this.$('prompt-name').textContent = ev.name;
+    this.$('prompt-sub').textContent = ev.desc + (ev.ai ? ` · ${ev.ai} rivals` : '');
+    this.$('prompt-key').textContent = usingPad ? 'D-PAD ↑' : 'ENTER';
   }
 
   setCameraLabel(label) {
@@ -523,6 +841,12 @@ export class UI {
     set('time', 'race-time', formatTime(d.time));
     set('laptime', 'race-laptime', formatTime(d.lapTime));
     set('best', 'race-best', formatTime(d.bestLap ?? d.record));
+    set('lapLabel', 'race-lap-label', d.sprint ? 'STAGE' : 'LAP');
+    if (d.sprint) set('lap', 'race-lap', `${Math.round(d.progress * 100)}%`);
+    if (d.board) {
+      const html = d.board.map((r) => `<li class="${r.player ? 'is-player' : ''}"><b>${r.pos}</b><span>${r.name}</span><i>${r.gap}</i></li>`).join('');
+      if (html !== L.board) { L.board = html; this.el.raceBoard.innerHTML = html; }
+    }
   }
 
   countdown(text) {
@@ -622,19 +946,31 @@ export class UI {
     window.addEventListener('resize', () => {
       if (this.menuOpen && this.activeTab === 'map') this.cb.onAction('redraw-map');
     });
+    this.$('events-filter').querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
+      this.eventFilter = chip.dataset.filter;
+      this.$('events-filter').querySelectorAll('.chip').forEach((c) => c.classList.toggle('is-active', c === chip));
+      if (this._events) this.renderEvents(...this._events);
+    }));
   }
 
   renderEvents(events, progression, activeId) {
+    this._events = [events, progression, activeId];
     const wrap = this.$('event-cards');
-    wrap.innerHTML = events.map((ev) => {
+    const f = this.eventFilter;
+    const list = events.filter((ev) => f === 'all'
+      || (f === 'trial' && ev.type === 'trial')
+      || (f === 'sprint' && (ev.kind === 'SPRINT' || ev.kind === 'DRAG RACE'))
+      || (f === 'race' && ev.type === 'race' && ev.kind !== 'SPRINT' && ev.kind !== 'DRAG RACE'));
+    wrap.innerHTML = list.map((ev) => {
       const rec = progression.data.records[ev.id] || {};
       let record = '';
       if (ev.type === 'race') record = rec.bestPosition ? `Best: ${ordinal(rec.bestPosition)} · Wins ${rec.wins || 0}` : 'Not raced yet';
       else record = rec.bestLap ? `Best lap ${formatTime(rec.bestLap)} ${'★'.repeat(rec.stars || 0)}` : 'No time set';
       const top = ev.type === 'race' ? `Win ${fmt(ev.payout[0])} CR` : `Up to ${fmt(ev.payout[2])} CR`;
-      const kind = ev.type === 'race' ? (ev.route === 'city' ? 'STREET RACE' : ev.route === 'highway' ? 'HIGHWAY RACE' : ev.route === 'mountain' ? 'MOUNTAIN RACE' : 'ROAD RACE') : 'TIME TRIAL';
-      return `<button class="card event-card event-card--${ev.type}" data-action="start-event" data-arg="${ev.id}">
-        <div class="event-card__type">${kind}${activeId === ev.id ? ' · ACTIVE' : ''}</div>
+      const thumb = this.thumbs?.[ev.route];
+      const style = `--event-color:${EVENT_COLOR(ev)};${thumb ? `--thumb:url(${thumb})` : ''}`;
+      return `<button class="card event-card event-card--${ev.type}${thumb ? ' has-thumb' : ''}" style="${style}" data-action="start-event" data-arg="${ev.id}">
+        <div class="event-card__type">${EVENT_KIND_LABEL(ev)}${activeId === ev.id ? ' · ACTIVE' : ''}</div>
         <div>
           <div class="card__title">${ev.name}</div>
           <div class="card__sub">${ev.desc} · ${top}</div>
@@ -726,6 +1062,13 @@ export class UI {
     on('set-res', 'resolution', 'change', (el) => Number(el.value));
     on('set-grass', 'grass');
     on('set-traffic', 'traffic', 'change', (el) => Number(el.value));
+    on('set-transmission', 'transmission');
+    on('set-abs', 'abs', 'change', (el) => el.checked);
+    on('set-tcs', 'tcs', 'change', (el) => el.checked);
+    on('set-stm', 'stm', 'change', (el) => el.checked);
+    on('set-steer', 'steerAssist', 'change', (el) => el.checked);
+    on('set-quality', 'quality');
+    on('set-reflections', 'reflections');
     on('set-master', 'master', 'input', (el) => Number(el.value) / 100);
     on('set-music', 'music', 'input', (el) => Number(el.value) / 100);
     on('set-sfx', 'sfx', 'input', (el) => Number(el.value) / 100);
@@ -743,6 +1086,13 @@ export class UI {
     this.$('set-res').value = String(s.resolution);
     this.$('set-grass').value = s.grass;
     this.$('set-traffic').value = String(s.traffic);
+    this.$('set-transmission').value = s.transmission ?? 'auto';
+    this.$('set-abs').checked = s.abs !== false;
+    this.$('set-tcs').checked = s.tcs !== false;
+    this.$('set-stm').checked = s.stm !== false;
+    this.$('set-steer').checked = s.steerAssist !== false;
+    this.$('set-quality').value = s.quality ?? 'high';
+    this.$('set-reflections').value = s.reflections ?? 'dynamic';
     this.$('set-master').value = String(Math.round(s.master * 100));
     this.$('set-music').value = String(Math.round(s.music * 100));
     this.$('set-sfx').value = String(Math.round(s.sfx * 100));
@@ -790,7 +1140,7 @@ export class UI {
   _focusables() {
     if (this.resultsOpen) return [...this.el.results.querySelectorAll('button')];
     const panel = this.el.menu.querySelector('.menu__panel.is-active');
-    return [...panel.querySelectorAll('button.card:not([hidden]), .swatch, label.card, .upgrade-row .btn:not(:disabled)')];
+    return [...panel.querySelectorAll('button.card:not([hidden]), .swatch, label.card, label.setting, .chip, .fast-travel .btn, .settings .btn, .upgrade-row .btn:not(:disabled)')];
   }
 
   _clearFocus() {

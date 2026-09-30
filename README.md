@@ -16,56 +16,126 @@ npm start                  # npx http-server on http://localhost:8080
 python3 -m http.server 8080
 ```
 
+The first load builds the whole world (terrain, roads, trees, impostor atlas),
+which takes a few seconds on a desktop GPU.
+
 ## What's in the game
 
-- **A 4 km × 4 km open world:**
-  - rolling hills and forests
-  - a mountain range around the map edge with a snowy Fuji-style peak beyond it
-  - roads that cut into the hillsides and sit on embankments
-  - over 7,000 trees (broadleaf, pine and sakura) and dense grass that sways in the wind
-- **Neon City:** a 1 km² downtown grid with about 240 buildings. Their glass
-  and window facades reflect the sky, and the windows light up at night. The
-  city also has neon signs, rooftop billboards, crosswalks, street lights and
-  traffic lights.
-- **Roads:** the Festival Loop circuit, the 10 km **Horizon Highway** around
-  the map, the **Fuji Pass** mountain road, and connector roads between them,
-  with guard rails, street lights and lane markings. Fast travel to each area
-  from the Map tab.
-- **Seven events.** Five are races against 5 AI rivals:
-  - Sakura Circuit
-  - Neon City Street Race
-  - Fuji Pass
-  - Horizon Highway
-  - Festival Sprint
+### An 8 km × 8 km open world
 
-  The other two are time trials: Hanami and Neon Time Attack. Races have
-  checkpoint gates, live positions, a wrong-way warning, results and payouts.
-- **Challenges around the map:** 4 speed traps, 2 speed zones, 2 drift zones and
-  2 ramp jumps, each rated 1–3 stars with saved records.
-- **Cars modelled in Blender:** five distinct bodies (GT coupe, mid-engine
-  supercar, JDM drift coupe, rally hatchback, hypercar). Each has wheel arches,
-  glass with an interior behind it, live headlights, brake lights and reverse
-  lights, a grille, mirrors, wings and detailed wheels. The garage shows studio
-  renders of each car.
-- **Realistic rendering:**
-  - a physically based sky with drifting clouds, stars at night and a full day/night cycle
-  - reflections that match the sky, and soft sun shadows that follow you
-  - sky-coloured fog, bloom, colour grading and speed blur
-  - headlights that light the road at night, and a soft contact shadow under each car
-- **Camera:** a tight chase camera that stays at a fixed distance behind the
-  car when you accelerate. It follows the car on slopes, pulls in when a wall
-  or building is behind you, and has far-chase and bumper modes (`C`).
-- **Traffic:** AI cars cruise the highway, city, festival loop and mountain
-  pass. You can set traffic to off, light, normal or busy.
-- **Skill chains:** drift, speed, air, clean driving and cone smashes build a
-  chain with a multiplier. A crash breaks it.
-- **Progression:** credits, XP and levels; buy 5 cars and upgrade engine,
-  tyres and brakes (3 tiers each, which change the car's class); 8 paint
-  colours. Everything, including settings, is saved automatically.
-- **Audio, all synthesised live:** engine sound that follows RPM, tyre squeal,
-  wind, crashes, UI sounds, and a generative synthwave radio (`M` toggles it).
-- **Controls:** keyboard, gamepad (including menu navigation) and on-screen
-  touch buttons.
+| Region | What's there |
+| --- | --- |
+| **Festival Site** | The Sakura festival hub: stages, Ferris wheel, lanterns and the Festival Loop circuit |
+| **Neon City** | A 1 km² downtown grid of glass towers, neon signs, billboards and traffic lights |
+| **Sea of Sakura coast** | Cliff roads, Sunset Beach with umbrellas, and an ocean with foam and depth colour |
+| **Minato Bay** | A harbour town with warehouses, a breakwater, a lighthouse (its beam sweeps at night) and moored boats |
+| **Sakura Village farmland** | Paddy and crop fields, dirt lanes and traditional minka farmhouses |
+| **Lake Sakura** | A lake loop with a vermilion bridge, a five-storey pagoda and a torii standing in the water |
+| **Wind farm downs** | Rolling hills with turning wind turbines and blinking beacons |
+| **Fuji Pass & the Summit** | A mountain pass and a 12 % hill-climb to a snowy observatory |
+| **Kiso Forest** | Gravel rally stages through dense pine forest |
+| **Airfield** | A 1.4 km runway with hangars, a control tower, runway lights and a launch ramp |
+
+Roads are generated from spline centre-lines. The world includes:
+
+- automatic bridges and viaducts wherever a road crosses water or a valley
+- road profiles held to a grade limit and smoothed with vertical curves, so
+  crests don't launch you
+- banked cuttings and embankments that blend into the terrain
+- junctions and at-grade crossings resolved so every road meets its neighbours at the same height
+
+A snowy Fuji-style peak and distant ranges sit beyond the playable area.
+
+### Physics
+
+- A **raycast vehicle** with per-wheel spin simulated in 4 sub-steps.
+- A **combined-slip tyre model** (a "magic formula" curve). Braking and
+  cornering share the same grip, so trail-braking, power oversteer and
+  handbrake turns behave as they should.
+- A **simulated drivetrain:**
+  - torque curves and real gear ratios
+  - a clutch for launches
+  - a limited-slip differential
+  - engine braking
+  - automatic or manual gears (`Q` / `E`), with backfire on hard upshifts
+- **Aerodynamics:** drag that sets each car's top speed, and per-axle downforce.
+- **Surfaces:** asphalt, concrete, gravel, dirt, grass, sand, snow and rock.
+  Each has its own grip, rolling resistance and roughness. Off-road-biased
+  cars (like the Yama Rally) lose less grip on loose ground.
+- **Driver aids you can switch off:** ABS, traction control, stability
+  control and steering assist.
+- The body leans visibly with weight transfer and shakes on rough ground.
+- **Five cars with distinct handling**, from the planted Volta R and Tenshi X
+  hypercars to the tail-happy Kaze Drift.
+
+### Events and activities
+
+- **14 events**, each started from a light-column beacon in the world
+  (drive in and press `Enter`) or from the Festival tab:
+  - **Road races:** Sakura Circuit, Festival Sprint, Horizon Highway,
+    Coastal Circuit, Lakeside Loop
+  - **Street races:** Neon City, Minato Harbour GP
+  - **Mountain race:** Fuji Pass
+  - **Sprint:** Summit Hill Climb
+  - **Dirt race:** Kiso Forest Rally
+  - **Drag race:** Airfield Drag
+  - **Time trials:** Hanami, Neon Time Attack, Sakura Bridge
+- Races have up to 5 AI rivals that use the same physics. They include:
+  - a live leaderboard with gaps
+  - checkpoints and a wrong-way warning
+  - results and payouts
+  - three difficulty levels
+- **19 PR stunts around the map:** 8 speed traps, 4 speed zones, 4 drift
+  zones and 3 ramp jumps, each rated 1–3 stars.
+- **Skill chains:** drift, speed, air, cone smashes and clean driving build a
+  multiplier. A crash breaks the chain.
+- **Progression:** credits, XP and levels. You can buy 5 cars and upgrade the
+  engine, tyres and brakes. Everything is saved automatically.
+- **Traffic** drives the highway, the towns, the coast and the lake.
+
+### Rendering
+
+- **Trees** are procedurally modelled in several species: broadleaf, pine,
+  sakura and maple, 10 variants in all. Each has:
+  - branching bark trunks and leaf-cluster crowns
+  - baked ambient occlusion, back-lit translucency and wind sway
+- **Distant trees** use an octahedral impostor atlas, rendered from the real
+  models at load time. As you drive, the atlas is swapped for full models
+  within 230 m.
+- **Terrain** blends grass, forest floor, farmland, sand, rock and snow from
+  mask textures, with detail normals and tree-shade darkening. It uses a
+  level-of-detail tile mesh with skirts.
+- **Water:** the ocean and the lake have fractal normals, depth-based colour,
+  shoreline foam and sky reflections.
+- **Height fog** with sun in-scattering, over a physical sky with clouds, a
+  day/night cycle, stars and a moon.
+- **Tyre effects:** persistent skid marks; smoke, dust and gravel spray tinted
+  to the surface; sparks when scraping; exhaust flames.
+- **Dynamic reflections** in the car paint.
+- Bloom, colour grading, speed blur and soft shadows.
+- **Quality presets** (Ultra / High / Medium / Low) plus per-setting control.
+
+### UI
+
+- **HUD:**
+  - a tachometer with gear, redline and TCS/ABS indicator lights
+  - a rotating minimap with GPS route line and event flags
+  - region name pop-ups
+  - an in-world event prompt
+  - a race leaderboard
+- **Festival tab:** an event browser with filters (races, sprints & drag,
+  time trials) and thumbnails rendered from each route.
+- **Interactive world map:**
+  - zoom, pan and follow
+  - hover tooltips
+  - click an event to start it or set a GPS route to it
+  - click anywhere to set a waypoint
+  - fast travel to 10 locations
+- **GPS:** shortest-path routing over the road network (Dijkstra), shown on
+  the minimap with the distance remaining.
+- **Settings** are grouped into Driving (assists, transmission, AI difficulty,
+  traffic), Graphics (presets, shadows, grass, resolution, reflections, bloom,
+  blur, time of day) and Audio.
 
 ## Controls
 
@@ -74,33 +144,44 @@ python3 -m http.server 8080
 | Throttle / Brake / Reverse | `W` `S` or `↑` `↓` | RT / LT | GAS / BRAKE |
 | Steer | `A` `D` or `←` `→` | Left stick | ◀ ▶ |
 | Handbrake (drift) | `Space` | A | HB |
+| Shift up / down (manual) | `E` / `Q` | B / X | — |
+| Start nearby event | `Enter` or `F` | D-pad ↑ | — |
+| World map | `Tab` | — | ☰ → Map |
 | Menu | `Esc` | Start | ☰ |
 | Menu tabs / navigate / select | `Q` `E` / mouse | LB RB / D-pad / A | tap |
 | Camera (chase / far / bumper) | `C` | View | — |
-| Reset to track | `R` | Y | — |
+| Reset to road | `R` | Y | — |
 | Radio on/off | `M` | — | Settings |
 
 ## Project layout
 
 ```
-├── index.html               Title, HUD, results, menu markup, import map
-├── styles/ui.css            Glassmorphic HUD, race panel, stunt banners, tile menu, touch
+├── index.html               Loader, HUD, results, menu markup, import map
+├── styles/ui.css            Glassmorphic HUD, race board, festival/map/settings layouts, touch
 ├── assets/cars/             Blender-built car models (.glb) + garage thumbnails (.png)
 ├── tools/blender/           build_cars.py — generates the car models with Blender (bpy)
 └── src/
-    ├── main.js              Boot, frame loop, TITLE/GAMEPLAY/MENU/RESULTS states, skill chains
-    ├── Environment.js       Assembles the world; festival site, ramps, gates, stunts, backdrop
+    ├── main.js              Boot, frame loop, game states, quality presets, GPS, reflections
+    ├── Environment.js       Assembles the world; festival site, ramps, stunts, backdrop, map image
     ├── world/
-    │   ├── Terrain.js       Height-field terrain, road cuttings, ground shader, physics heightfield
-    │   ├── Roads.js         Routes (spline centre-lines + elevation), road meshes, rails, lights
-    │   ├── City.js          Neon City: streets, sidewalks, instanced buildings, signs, lights
-    │   ├── Vegetation.js    Chunked instanced trees (leaf cards) + GPU grass
-    │   ├── Atmosphere.js    Physical sky, clouds/stars, sun/moon, fog, environment map
+    │   ├── Terrain.js       8 km height field: coast, lake, massif, farmland; road profiles,
+    │   │                    bridges, cuttings; LOD tiles; splat-mask ground shader
+    │   ├── Roads.js         Routes, connectors, junctions, road meshes, rails, lights, bridges
+    │   ├── City.js          Towns (downtown / harbour): streets, instanced buildings, signs
+    │   ├── Landmarks.js     Wind farm, pagoda, lighthouse, boats, village, observatory, airfield
+    │   ├── Water.js         Ocean + lake shader (normals, depth colour, foam)
+    │   ├── Vegetation.js    Procedural tree models, impostor atlas, rocks, GPU grass
+    │   ├── Surfaces.js      Surface map (asphalt, gravel, sand, snow…) for tyre grip
+    │   ├── Atmosphere.js    Physical sky, clouds/stars, sun/moon, environment map
+    │   ├── Fog.js           Height fog with sun in-scattering (patched shader chunks)
+    │   ├── Instancing.js    Spatially chunked InstancedMesh for culling
     │   └── Noise.js         Deterministic noise helpers
-    ├── PhysicsWorld.js      Rapier, 60 Hz fixed step, heightfield, collision groups; lite fallback
-    ├── Vehicle.js           Raycast vehicle, gearbox, tyres, input, car roster, glTF cars
+    ├── PhysicsWorld.js      Rapier, 60 Hz fixed step, heightfield, trimesh bridges; lite fallback
+    ├── Vehicle.js           Raycast vehicle, tyre model, drivetrain, aids, car roster, glTF cars
     ├── AIDriver.js          Pure-pursuit AI with corner speed planning, avoidance, recovery
-    ├── Events.js            Races / time trials on any route, PR stunts, free-roam traffic
+    ├── Events.js            Races / sprints / trials, AI grids, stunts, traffic, event beacons
+    ├── Navigation.js        Road graph + Dijkstra for the GPS
+    ├── Effects.js           Skid marks, smoke/dust/spark particles, exhaust flames
     ├── Progression.js       Save file: credits, XP/levels, garage, records, settings
     ├── Audio.js             Procedural Web Audio engine/sfx + generative radio
     ├── CameraController.js  Locked chase cam, far/bumper modes, showroom orbit
@@ -110,22 +191,34 @@ python3 -m http.server 8080
 
 ## Technical notes
 
-- **Physics.** Rapier WASM steps on a fixed 60 Hz accumulator with render
-  interpolation, on a 512×512 heightfield that matches the rendered terrain
-  exactly. The collision groups are `STATIC_GEOMETRY`, `VEHICLE_BODY`
-  (cars collide with each other), `WHEELS` (suspension rays) and `PROPS` (cones).
-  If Rapier can't load, a built-in lite solver keeps the game playable. It
-  supports terrain and ramps but not car-to-car contact.
-- **AI cars** use the same vehicle physics as the player. Their inputs come from
-  a driver model that plans cornering speeds from the upcoming curvature
-  (`v = √(μg/k)`) with a braking envelope, and applies mild catch-up so races
-  stay close.
+- **Physics.**
+  - Rapier WASM steps on a fixed 60 Hz accumulator with render interpolation.
+  - The ground is a 1024×1024 heightfield that matches the rendered terrain,
+    bridges are trimesh colliders, and all static props share one fixed body.
+  - Tyre forces come from slip ratio and slip angle, normalised by their peak
+    values and combined through the friction ellipse.
+  - Wheel spin is integrated implicitly, so it stays stable at 60 Hz.
+  - If Rapier can't load, a built-in lite solver keeps the game playable.
+- **Road profiles.** Each route's elevation goes through three steps:
+  1. It's fitted to the terrain and to flat zones (towns, junctions).
+  2. It's limited to a maximum grade.
+  3. It's smoothed with vertical curves.
+
+  Junctions are claimed by the highest-priority road so that connectors meet
+  it level. A stretch becomes a bridge wherever the road is over water or more
+  than 9 m above the ground.
+- **AI cars** use the same vehicle physics as the player. They plan cornering
+  speeds from the upcoming curvature (`v = √(μg/k)`), with a braking envelope
+  and an allowance for surface grip.
 - **Car models.** Run `tools/blender/build_cars.py` (see `assets/README.md`)
   to regenerate the cars after editing their style profiles. If a model can't
   load, a built-in procedural car body is used instead.
-- **Performance.** Trees are split into 512 m chunks so off-screen ones aren't
-  drawn, buildings and props are instanced, and grass is placed on the GPU.
-  Grass, shadows, traffic and resolution scale can be lowered in Settings for
-  slower GPUs.
+- **Performance.**
+  - Terrain is drawn as LOD tiles.
+  - Trees are near models plus a single impostor draw.
+  - Rocks, rails and props are spatially chunked instances, so they're culled
+    by the camera and the shadow frustum.
+  - Grass is placed on the GPU around the camera.
+  - Quality presets scale shadows, grass, resolution, reflections and bloom.
 
 `window.__horizon` exposes the running app in the browser console for debugging.

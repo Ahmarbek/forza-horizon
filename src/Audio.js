@@ -270,6 +270,25 @@ export class AudioSystem {
   skill() { this._tone(988, 0.12, 'triangle', 0.12); this._tone(1318, 0.18, 'triangle', 0.1, 0.07); }
   bank() { [784, 988, 1175, 1568].forEach((f, i) => this._tone(f, 0.22, 'triangle', 0.12, i * 0.07)); }
   fail() { this._tone(220, 0.3, 'sawtooth', 0.08); this._tone(165, 0.4, 'sawtooth', 0.08, 0.12); }
+  /** Exhaust pop on a hard upshift: short filtered noise crack + low thump. */
+  backfire() {
+    if (!this.ready) return;
+    const c = this.ctx;
+    const t = c.currentTime;
+    const src = c.createBufferSource();
+    src.buffer = this.noise;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900 + Math.random() * 500;
+    bp.Q.value = 1.2;
+    const g = c.createGain();
+    this._env(g, t, 0.002, 0.35, 0.09);
+    src.connect(bp).connect(g).connect(this.sfxBus);
+    src.start(t, Math.random());
+    src.stop(t + 0.15);
+    this._tone(70, 0.08, 'sine', 0.25);
+  }
+
   checkpoint() { this._tone(1046, 0.12, 'sine', 0.2); this._tone(1568, 0.25, 'sine', 0.16, 0.06); }
   countdown(go) { this._tone(go ? 880 : 440, go ? 0.6 : 0.25, 'square', 0.12); }
   click() { this._tone(1400, 0.04, 'square', 0.04); }

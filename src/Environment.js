@@ -77,7 +77,7 @@ export class Environment {
     this.routes = roads.routes;
     this.routes.airfield.flat = true;
     this.routes.airfield.flatY = this.airfieldZone.y;
-    for (const [x, z] of roads.junctions()) terrain.addFlatCircle(x, z, 30, 110, 'auto');
+    for (const [x, z] of roads.junctions()) terrain.addFlatCircle(x, z, 30, 110, 'auto', true);
     this._defineRamps();
     terrain.build(roads.all);
     mark('terrain');

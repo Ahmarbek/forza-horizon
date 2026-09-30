@@ -316,7 +316,32 @@ export const SpeedBlurShader = {
 };
 
 /**
- * Build the post pipeline: Render → Bloom → SpeedBlur → Output (tone map + sRGB).
+ * Replaces NaN / Inf pixels (and clamps extreme HDR values) before bloom.
+ * Bloom's wide mip chain would otherwise smear a single bad pixel from a
+ * specular highlight into a black screen.
+ */
+export const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      // NaN → black; ±Inf and huge highlights → a bright but finite value
+      gl_FragColor = any(isnan(c)) ? vec4(0.0, 0.0, 0.0, 1.0) : clamp(c, 0.0, 2000.0);
+    }
+  `,
+};
+
+/**
+ * Build the post pipeline: Render → Sanitize → Bloom → SpeedBlur → Output (tone map + sRGB).
  */
 export function createPostProcessing(renderer, scene, camera) {
   const size = renderer.getSize(new THREE.Vector2());
@@ -331,11 +356,13 @@ export function createPostProcessing(renderer, scene, camera) {
   composer.setSize(size.x, size.y);
 
   const renderPass = new RenderPass(scene, camera);
+  const sanitizePass = new ShaderPass(SanitizeShader);
   const bloomPass = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.38, 0.55, 1.4);
   const blurPass = new ShaderPass(SpeedBlurShader);
   const outputPass = new OutputPass();
 
   composer.addPass(renderPass);
+  composer.addPass(sanitizePass);
   composer.addPass(bloomPass);
   composer.addPass(blurPass);
   composer.addPass(outputPass);

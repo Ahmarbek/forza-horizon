@@ -25,9 +25,14 @@
 
   <!-- ============================== LOADING ============================== -->
   <div id="loader" class="loader">
-    <div class="loader__brand">HORIZON<span>DRIVE</span></div>
-    <div class="loader__bar"><div id="loader-fill" class="loader__fill"></div></div>
-    <div id="loader-text" class="loader__text">Initialising physics…</div>
+    <div class="loader__sky"></div>
+    <div class="loader__content">
+      <div class="loader__brand">HORIZON<span>DRIVE</span></div>
+      <div class="loader__sub">SAKURA FESTIVAL</div>
+      <div class="loader__bar"><div id="loader-fill" class="loader__fill"></div></div>
+      <div id="loader-text" class="loader__text">Initialising physics…</div>
+    </div>
+    <div class="loader__tip"><b>TIP</b> <span id="loader-tip">Hold the handbrake briefly to kick the rear out, then balance the drift on the throttle.</span></div>
   </div>
 
   <!-- =============================== TITLE =============================== -->
@@ -84,7 +89,7 @@
       <div class="race-hud__row">
         <div class="race-hud__pos"><span id="race-pos">1</span><small>/<span id="race-total">6</span></small></div>
         <div class="race-hud__laps">
-          <div class="race-hud__label">LAP</div>
+          <div class="race-hud__label" id="race-lap-label">LAP</div>
           <div id="race-lap" class="race-hud__big">1/3</div>
         </div>
       </div>
@@ -93,6 +98,7 @@
         <dt>LAP</dt><dd id="race-laptime">0:00.000</dd>
         <dt>BEST</dt><dd id="race-best">--:--.---</dd>
       </dl>
+      <ol id="race-board" class="race-board"></ol>
     </div>
 
     <!-- Top-right: level, credits, score -->
@@ -106,15 +112,29 @@
       <div id="total-score" class="score-box__value">0</div>
     </div>
 
+    <div id="region-pop" class="region-pop">
+      <div class="region-pop__label">ENTERING</div>
+      <div id="region-pop-name" class="region-pop__name">Kiso Forest</div>
+    </div>
+
     <div id="countdown" class="countdown"></div>
     <div id="wrong-way" class="wrong-way">WRONG WAY</div>
+
+    <!-- Bottom-centre: event prompt -->
+    <div id="prompt" class="prompt">
+      <div id="prompt-kind" class="prompt__kind">ROAD RACE</div>
+      <div id="prompt-name" class="prompt__name">Coastal Circuit</div>
+      <div id="prompt-sub" class="prompt__sub">12 km · 5 rivals</div>
+      <div class="prompt__key"><kbd id="prompt-key">ENTER</kbd> START EVENT</div>
+    </div>
 
     <!-- Bottom-left: minimap -->
     <div class="minimap">
       <canvas id="minimap-canvas" width="320" height="320"></canvas>
       <div class="minimap__ring"></div>
-      <div class="minimap__north">N</div>
-      <div class="minimap__hint"><kbd>ESC</kbd> MENU <kbd>C</kbd> CAMERA <kbd>R</kbd> RESET <kbd>M</kbd> RADIO</div>
+      <div id="minimap-north" class="minimap__north">N</div>
+      <div id="gps" class="minimap__gps"></div>
+      <div class="minimap__hint"><kbd>ESC</kbd> MENU <kbd>TAB</kbd> MAP <kbd>C</kbd> CAMERA <kbd>R</kbd> RESET</div>
     </div>
 
     <!-- Bottom-right: tachometer / speedo -->
@@ -140,6 +160,11 @@
         <span id="speed-unit" class="tacho__speed-unit">MPH</span>
       </div>
       <div id="rpm-readout" class="tacho__rpm">0 RPM</div>
+      <div class="tacho__lights">
+        <span id="light-tcs" class="tacho__light">TCS</span>
+        <span id="light-abs" class="tacho__light">ABS</span>
+        <span id="light-box" class="tacho__light tacho__light--mode">AUTO</span>
+      </div>
       <div id="handbrake-light" class="tacho__hb">HANDBRAKE</div>
     </div>
 
@@ -209,31 +234,44 @@
 
     <!-- FESTIVAL -->
     <section class="menu__panel is-active" data-panel="festival">
-      <div class="grid grid--festival">
-        <button class="card card--hero card--pink" data-action="resume">
-          <div class="card__art card__art--road"></div>
-          <div class="card__title">Resume<br />Drive</div>
-          <div class="card__sub">Back to the Festival Loop</div>
-        </button>
-        <div id="event-cards" class="event-cards"></div>
-        <div class="card card--stats">
-          <div class="card__title">Career</div>
-          <dl class="stats">
-            <dt>Skill score</dt><dd id="stat-total">0</dd>
-            <dt>Best chain</dt><dd id="stat-best">0</dd>
-            <dt>Races won</dt><dd id="stat-wins">0</dd>
-            <dt>Longest drift</dt><dd id="stat-drift">0 m</dd>
-            <dt>Top speed</dt><dd id="stat-top">0</dd>
-            <dt>PR stars</dt><dd id="stat-stars">0</dd>
-          </dl>
+      <div class="festival">
+        <div class="festival__side">
+          <button class="card card--hero card--pink" data-action="resume">
+            <div class="card__art card__art--road"></div>
+            <div class="card__title">Resume<br />Drive</div>
+            <div class="card__sub" id="resume-sub">Back to the Festival Loop</div>
+          </button>
+          <div class="card card--stats">
+            <div class="card__title">Career</div>
+            <dl class="stats">
+              <dt>Skill score</dt><dd id="stat-total">0</dd>
+              <dt>Best chain</dt><dd id="stat-best">0</dd>
+              <dt>Races won</dt><dd id="stat-wins">0</dd>
+              <dt>Longest drift</dt><dd id="stat-drift">0 m</dd>
+              <dt>Top speed</dt><dd id="stat-top">0</dd>
+              <dt>PR stars</dt><dd id="stat-stars">0</dd>
+            </dl>
+          </div>
+          <div class="mini-cards">
+            <button class="card card--mini card--cyan" data-action="reset"><div class="card__title">Reset Car</div></button>
+            <button class="card card--mini card--yellow" data-action="time-golden"><div class="card__title">Golden Hour</div></button>
+            <button class="card card--mini card--lime" data-action="time-noon"><div class="card__title">Midday</div></button>
+            <button class="card card--mini card--violet" data-action="time-night"><div class="card__title">Night</div></button>
+            <button class="card card--mini card--violet" data-action="camera"><div class="card__title">Camera</div><div class="card__sub" id="camera-label">Close Chase</div></button>
+            <button class="card card--mini card--danger" data-action="quit-event" id="quit-event" hidden><div class="card__title">Quit Event</div></button>
+          </div>
         </div>
-        <div class="mini-cards">
-          <button class="card card--mini card--cyan" data-action="reset"><div class="card__title">Reset Car</div></button>
-          <button class="card card--mini card--yellow" data-action="time-golden"><div class="card__title">Golden Hour</div></button>
-          <button class="card card--mini card--lime" data-action="time-noon"><div class="card__title">Midday</div></button>
-          <button class="card card--mini card--violet" data-action="time-night"><div class="card__title">Night</div></button>
-          <button class="card card--mini card--violet" data-action="camera"><div class="card__title">Camera</div><div class="card__sub" id="camera-label">Close Chase</div></button>
-          <button class="card card--mini card--danger" data-action="quit-event" id="quit-event" hidden><div class="card__title">Quit Event</div></button>
+        <div class="festival__events">
+          <div class="events-head">
+            <div class="events-head__title">EVENTS</div>
+            <div class="events-filter" id="events-filter">
+              <button class="chip is-active" data-filter="all">All</button>
+              <button class="chip" data-filter="race">Races</button>
+              <button class="chip" data-filter="sprint">Sprints &amp; Drag</button>
+              <button class="chip" data-filter="trial">Time Trials</button>
+            </div>
+          </div>
+          <div id="event-cards" class="event-cards"></div>
         </div>
       </div>
     </section>
@@ -252,103 +290,88 @@
 
     <!-- MAP -->
     <section class="menu__panel" data-panel="map">
-      <div class="map-wrap">
-        <canvas id="world-map" width="900" height="600"></canvas>
-        <div class="fast-travel">
-          <div class="fast-travel__label">FAST TRAVEL</div>
-          <button class="btn btn--small" data-action="travel" data-arg="festival">Festival Site</button>
-          <button class="btn btn--small" data-action="travel" data-arg="city">Neon City</button>
-          <button class="btn btn--small" data-action="travel" data-arg="mountain">Fuji Pass</button>
-          <button class="btn btn--small" data-action="travel" data-arg="highway">Horizon Highway</button>
-          <button class="btn btn--small" data-action="travel" data-arg="minato">Minato Bay</button>
-          <button class="btn btn--small" data-action="travel" data-arg="coast">Coastal Road</button>
-          <button class="btn btn--small" data-action="travel" data-arg="lake">Lake Sakura</button>
-          <button class="btn btn--small" data-action="travel" data-arg="summit">Summit Road</button>
-          <button class="btn btn--small" data-action="travel" data-arg="rally">Kiso Forest</button>
-          <button class="btn btn--small" data-action="travel" data-arg="airfield">Airfield</button>
+      <div class="map-layout">
+        <div class="map-wrap" id="map-wrap">
+          <canvas id="world-map" width="900" height="600"></canvas>
+          <div class="map-zoom">
+            <button class="map-zoom__btn" data-map="in">+</button>
+            <button class="map-zoom__btn" data-map="out">−</button>
+            <button class="map-zoom__btn" data-map="center">◎</button>
+          </div>
+          <div id="map-tip" class="map-tip" hidden></div>
+          <div class="map-legend">
+            <span><i class="dot dot--player"></i> You</span>
+            <span><i class="dot dot--flag"></i> Event</span>
+            <span><i class="dot dot--trap"></i> Speed trap / zone</span>
+            <span><i class="dot dot--drift"></i> Drift zone</span>
+            <span><i class="dot dot--jump"></i> Danger sign</span>
+            <span><i class="dot dot--gps"></i> GPS route</span>
+          </div>
         </div>
-        <div class="map-legend">
-          <span><i class="dot dot--player"></i> You</span>
-          <span><i class="dot dot--road"></i> Roads</span>
-          <span><i class="dot dot--hwy"></i> Highway</span>
-          <span><i class="dot dot--flag"></i> Race start</span>
-          <span><i class="dot dot--trap"></i> Speed trap / zone</span>
-          <span><i class="dot dot--drift"></i> Drift zone</span>
-          <span><i class="dot dot--jump"></i> Danger sign</span>
-        </div>
+        <aside class="map-side">
+          <div id="map-info" class="map-info">
+            <div class="map-info__kind">WORLD MAP</div>
+            <div class="map-info__name">Click anywhere to set a waypoint</div>
+            <div class="map-info__sub">Drag to pan · scroll to zoom · click an event for details</div>
+          </div>
+          <div class="fast-travel">
+            <div class="fast-travel__label">FAST TRAVEL</div>
+            <button class="btn btn--small" data-action="travel" data-arg="festival">Festival Site</button>
+            <button class="btn btn--small" data-action="travel" data-arg="city">Neon City</button>
+            <button class="btn btn--small" data-action="travel" data-arg="minato">Minato Bay</button>
+            <button class="btn btn--small" data-action="travel" data-arg="coast">Coastal Road</button>
+            <button class="btn btn--small" data-action="travel" data-arg="lake">Lake Sakura</button>
+            <button class="btn btn--small" data-action="travel" data-arg="mountain">Fuji Pass</button>
+            <button class="btn btn--small" data-action="travel" data-arg="summit">Summit Road</button>
+            <button class="btn btn--small" data-action="travel" data-arg="rally">Kiso Forest</button>
+            <button class="btn btn--small" data-action="travel" data-arg="airfield">Airfield</button>
+            <button class="btn btn--small" data-action="travel" data-arg="highway">Highway</button>
+            <button class="btn btn--small btn--ghost" data-action="clear-waypoint">Clear GPS</button>
+          </div>
+        </aside>
       </div>
     </section>
 
     <!-- SETTINGS -->
     <section class="menu__panel" data-panel="settings">
-      <div class="grid grid--settings">
-        <label class="card card--setting">
-          <div class="card__title">Speed Units</div>
-          <select id="set-units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select>
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">AI Difficulty</div>
-          <select id="set-difficulty">
-            <option value="easy">Easy</option><option value="normal">Normal</option>
-            <option value="hard">Hard</option><option value="unbeatable">Unbeatable</option>
-          </select>
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Master Volume</div>
-          <input type="range" id="set-master" min="0" max="100" value="80" />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Music Volume</div>
-          <input type="range" id="set-music" min="0" max="100" value="35" />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Effects Volume</div>
-          <input type="range" id="set-sfx" min="0" max="100" value="80" />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Horizon Radio</div>
-          <input type="checkbox" id="set-radio" checked />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Bloom</div>
-          <input type="checkbox" id="set-bloom" checked />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Speed Blur</div>
-          <input type="checkbox" id="set-blur" checked />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Shadows</div>
-          <select id="set-shadows"><option value="2048">High</option><option value="1024">Medium</option><option value="0">Off</option></select>
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Time of Day</div>
-          <input type="range" id="set-time" min="-14" max="65" value="38" />
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Resolution Scale</div>
-          <select id="set-res"><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select>
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Grass</div>
-          <select id="set-grass"><option value="high">High</option><option value="low">Low</option><option value="off">Off</option></select>
-        </label>
-        <label class="card card--setting">
-          <div class="card__title">Traffic</div>
-          <select id="set-traffic"><option value="1">Normal</option><option value="1.6">Busy</option><option value="0.5">Light</option><option value="0">Off</option></select>
-        </label>
-        <button class="card card--setting card--danger" data-action="reset-progress">
-          <div class="card__title">Reset Progress</div>
-          <div class="card__sub">Wipe credits, cars &amp; records</div>
-        </button>
-        <div class="card card--setting card--controls">
-          <div class="card__title">Controls</div>
+      <div class="settings">
+        <div class="settings__group">
+          <div class="settings__title">DRIVING</div>
+          <label class="setting"><span>Speed units</span><select id="set-units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select></label>
+          <label class="setting"><span>AI difficulty</span><select id="set-difficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option><option value="unbeatable">Unbeatable</option></select></label>
+          <label class="setting"><span>Transmission</span><select id="set-transmission"><option value="auto">Automatic</option><option value="manual">Manual (E / Q)</option></select></label>
+          <label class="setting"><span>ABS</span><input type="checkbox" id="set-abs" checked /></label>
+          <label class="setting"><span>Traction control</span><input type="checkbox" id="set-tcs" checked /></label>
+          <label class="setting"><span>Stability control</span><input type="checkbox" id="set-stm" checked /></label>
+          <label class="setting"><span>Steering assist</span><input type="checkbox" id="set-steer" checked /></label>
+          <label class="setting"><span>Traffic</span><select id="set-traffic"><option value="1">Normal</option><option value="1.6">Busy</option><option value="0.5">Light</option><option value="0">Off</option></select></label>
+        </div>
+        <div class="settings__group">
+          <div class="settings__title">GRAPHICS</div>
+          <label class="setting"><span>Quality preset</span><select id="set-quality"><option value="ultra">Ultra</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="custom">Custom</option></select></label>
+          <label class="setting"><span>Shadows</span><select id="set-shadows"><option value="4096">Ultra</option><option value="2048">High</option><option value="1024">Medium</option><option value="0">Off</option></select></label>
+          <label class="setting"><span>Grass</span><select id="set-grass"><option value="high">High</option><option value="low">Low</option><option value="off">Off</option></select></label>
+          <label class="setting"><span>Resolution scale</span><select id="set-res"><option value="1">100%</option><option value="0.85">85%</option><option value="0.75">75%</option><option value="0.5">50%</option></select></label>
+          <label class="setting"><span>Car reflections</span><select id="set-reflections"><option value="dynamic">Dynamic</option><option value="sky">Sky only</option></select></label>
+          <label class="setting"><span>Bloom</span><input type="checkbox" id="set-bloom" checked /></label>
+          <label class="setting"><span>Speed blur</span><input type="checkbox" id="set-blur" checked /></label>
+          <label class="setting setting--range"><span>Time of day</span><input type="range" id="set-time" min="-14" max="65" value="38" /></label>
+        </div>
+        <div class="settings__group">
+          <div class="settings__title">AUDIO</div>
+          <label class="setting setting--range"><span>Master</span><input type="range" id="set-master" min="0" max="100" value="80" /></label>
+          <label class="setting setting--range"><span>Music</span><input type="range" id="set-music" min="0" max="100" value="35" /></label>
+          <label class="setting setting--range"><span>Effects</span><input type="range" id="set-sfx" min="0" max="100" value="80" /></label>
+          <label class="setting"><span>Horizon Radio</span><input type="checkbox" id="set-radio" checked /></label>
+          <div class="settings__title settings__title--gap">CONTROLS</div>
           <ul class="controls">
             <li><kbd>W</kbd>/<kbd>↑</kbd> Throttle · <kbd>S</kbd>/<kbd>↓</kbd> Brake / Reverse</li>
-            <li><kbd>A</kbd> <kbd>D</kbd>/<kbd>←</kbd> <kbd>→</kbd> Steer · <kbd>Space</kbd> Handbrake</li>
-            <li><kbd>C</kbd> Camera (chase / far / bumper) · <kbd>R</kbd> Reset · <kbd>M</kbd> Radio · <kbd>Esc</kbd> Menu</li>
-            <li>Gamepad: RT/LT, L-Stick, A handbrake, Y reset, View camera, Start menu</li>
+            <li><kbd>A</kbd> <kbd>D</kbd> Steer · <kbd>Space</kbd> Handbrake</li>
+            <li><kbd>E</kbd> <kbd>Q</kbd> Shift (manual) · <kbd>Enter</kbd> Start event</li>
+            <li><kbd>C</kbd> Camera · <kbd>R</kbd> Reset · <kbd>Tab</kbd> Map · <kbd>M</kbd> Radio</li>
+            <li>Pad: RT/LT, L-stick, A handbrake, B/X shift, D-pad ↑ start event</li>
           </ul>
+          <button class="btn btn--danger" data-action="reset-progress">Reset progress</button>
         </div>
       </div>
     </section>

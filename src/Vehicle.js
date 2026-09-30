@@ -595,6 +595,8 @@ export class Vehicle {
     this._shiftTimer = 0.12;
     this._shiftCooldown = 0.35;
     this.shiftEvent = true;
+    // hard upshift near the redline → exhaust pop (audio/flames in main)
+    if (dir > 0 && this.rpm > this.drive.redline * 0.82 && this.throttleInput > 0.7) this.backfireEvent = true;
   }
 
   _buildContactShadow() {

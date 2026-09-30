@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mulberry32, fbm } from './Noise.js';
-import { TERRAIN_NOISE } from './Terrain.js';
+import { TERRAIN_NOISE, LAKE } from './Terrain.js';
+import { ChunkedInstances } from './Instancing.js';
 
 /**
  * Vegetation.js
@@ -673,7 +674,7 @@ export class Vegetation {
     const rnd = mulberry32(606);
     const variants = [];
     for (let v = 0; v < 3; v++) {
-      const g = new THREE.IcosahedronGeometry(1, 2);
+      const g = new THREE.IcosahedronGeometry(1, 1);
       const pos = g.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -684,7 +685,7 @@ export class Vegetation {
       variants.push(g);
     }
     const spots = [[], [], []];
-    for (let k = 0; k < 26000; k++) {
+    for (let k = 0, placed = 0; k < 26000 && placed < 5400; k++) {
       const x = (rnd() - 0.5) * (t.size - 200), z = (rnd() - 0.5) * (t.size - 200);
       const nrm = t.normalAt(x, z, _n);
       const slope = 1 - nrm.y;
@@ -696,24 +697,20 @@ export class Vegetation {
       if (t.isWater(x, z, 1.5)) continue;
       const s = 0.5 + Math.pow(rnd(), 3) * (slope > 0.18 ? 4 : 1.8);
       spots[k % 3].push({ x, z, y: h - s * 0.25, s, r: rnd() * Math.PI * 2, t: rnd() });
+      placed++;
     }
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 });
-    const col = new THREE.Color();
-    variants.forEach((g, vi) => {
-      const list = spots[vi];
-      const mesh = new THREE.InstancedMesh(g, mat, Math.max(1, list.length));
-      mesh.count = list.length;
-      list.forEach((s, i) => {
-        _q.setFromEuler(_e.set(s.t * 0.4, s.r, (s.t - 0.5) * 0.3));
-        mesh.setMatrixAt(i, _m.compose(_pp.set(s.x, s.y, s.z), _q, _sc.setScalar(s.s)));
-        mesh.setColorAt(i, col.setHSL(0.08, 0.06 + s.t * 0.08, 0.34 + s.t * 0.22));
-        if (s.s > 1.4) this.physics.addStaticCylinder(_pp.set(s.x, s.y, s.z), s.s * 0.9, s.s * 0.35);
+    this.rockChunks = variants.map((g, vi) => {
+      for (const s of spots[vi]) if (s.s > 1.4) this.physics.addStaticCylinder(_pp.set(s.x, s.y, s.z), s.s * 0.9, s.s * 0.35);
+      this.instanceCount += spots[vi].length;
+      return new ChunkedInstances(this.scene, g, mat, spots[vi], {
+        chunk: 384, maxDistance: 1400, colors: true,
+        write: (s, m, c) => {
+          _q.setFromEuler(_e.set(s.t * 0.4, s.r, (s.t - 0.5) * 0.3));
+          m.compose(_pp.set(s.x, s.y, s.z), _q, _sc.setScalar(s.s));
+          c.setHSL(0.08, 0.06 + s.t * 0.08, 0.34 + s.t * 0.22);
+        },
       });
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.computeBoundingSphere();
-      this.scene.add(mesh);
-      this.instanceCount += list.length;
     });
     this.rockCount = spots[0].length + spots[1].length + spots[2].length;
   }
@@ -746,6 +743,7 @@ export class Vegetation {
       uRadius: { value: 75 },
       uSnow: { value: t.snowLine },
       uSea: { value: t.waterLevel ?? -2 },
+      uLake: { value: LAKE.level },
     };
     const u = this.grassUniforms;
     const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -763,6 +761,7 @@ export class Vegetation {
           uniform float uRadius;
           uniform float uSnow;
           uniform float uSea;
+          uniform float uLake;
           varying float vTip;
           varying vec3 vGrassCol;
           ${TERRAIN_NOISE}
@@ -791,7 +790,8 @@ export class Vegetation {
           float slope = abs(hAt(wp + vec2(2.0, 0.0)) - h0) + abs(hAt(wp + vec2(0.0, 2.0)) - h0);
           float keep = (1.0 - smoothstep(0.02, 0.2, mk.r)) * (1.0 - mk.g) * (1.0 - smoothstep(0.6, 1.2, slope))
                      * (1.0 - smoothstep(uSnow - 60.0, uSnow - 20.0, h0))
-                     * (1.0 - smoothstep(0.25, 0.5, mk2.r) * (1.0 - smoothstep(uSea + 3.0, uSea + 6.0, h0)))
+                     * (1.0 - smoothstep(0.25, 0.5, mk2.r) * max(1.0 - smoothstep(uSea + 3.0, uSea + 6.0, h0),
+                                                                   step(1500.0, wp.y) * (1.0 - smoothstep(uLake + 1.6, uLake + 3.0, h0))))
                      * (1.0 - smoothstep(0.4, 0.7, mk2.g));
           float clump = tnoise(wp * 0.08);
           keep *= smoothstep(0.15, 0.38, clump + aOff.w * 0.2);
@@ -842,6 +842,10 @@ export class Vegetation {
       this._lastRebuild.copy(cam);
     }
     if (this.impUniforms) this.impUniforms.uCam.value.copy(this._lastRebuild);
+    if (this.rockChunks && (this._rockT = (this._rockT || 0) + dt) > 0.5) {
+      this._rockT = 0;
+      for (const rc of this.rockChunks) rc.update(cam);
+    }
     if (this.grass) {
       this.grassUniforms.uCam.value.copy(cam);
       this.grassUniforms.uTime.value += dt;

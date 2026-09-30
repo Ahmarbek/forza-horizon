@@ -85,6 +85,95 @@ const CP_COUNT = 10;
 const _v = new THREE.Vector3();
 const _t = new THREE.Vector3();
 
+export const EVENT_KIND_LABEL = (ev) => ev.kind ?? (ev.type === 'trial' ? 'TIME TRIAL'
+  : ev.route === 'city' ? 'STREET RACE' : ev.route === 'highway' ? 'HIGHWAY RACE' : ev.route === 'mountain' ? 'MOUNTAIN RACE' : 'ROAD RACE');
+export const EVENT_COLOR = (ev) => (ev.type === 'trial' ? '#2de2ff' : ev.kind === 'SPRINT' ? '#ffd23f' : ev.kind === 'DRAG RACE' ? '#ff8a2d' : ev.kind === 'DIRT RACE' ? '#b6ff3b' : '#ff2d8f');
+
+// ============================================================================
+// Event beacons: light columns at every event start you can drive into
+// ============================================================================
+export class EventBeacons {
+  constructor(scene, env) {
+    this.scene = scene;
+    this.env = env;
+    this.time = 0;
+    this.list = [];
+    const byRoute = new Map();
+    for (const ev of EVENTS) {
+      const r = env.routes[ev.route];
+      const k = byRoute.get(r) || 0;
+      byRoute.set(r, k + 1);
+      // alongside the road just before the start line, spaced out if several share a route
+      const i = r._wrap(Math.round(r.startIndex - (18 + k * 16) / r.spacing));
+      const side = r.flat && r.render === false ? 0.5 : 1;
+      const p = r.point(i, -(r.width / 2 + 5) * side, new THREE.Vector3());
+      p.y = r.flat ? (r.flatY ?? 0) : env.heightAt(p.x, p.z);
+      if (r.bridge && r.bridge[i]) p.y = r.ys[i];
+      this.list.push({ ev, pos: p, color: EVENT_COLOR(ev) });
+    }
+    this._build();
+  }
+
+  _build() {
+    const beamGeo = new THREE.CylinderGeometry(2.4, 2.4, 70, 24, 1, true).translate(0, 35, 0);
+    const ringGeo = new THREE.RingGeometry(3.2, 4.4, 40).rotateX(-Math.PI / 2);
+    this.uniforms = { uTime: { value: 0 }, uCam: { value: new THREE.Vector3() } };
+    for (const b of this.list) {
+      const mat = new THREE.ShaderMaterial({
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        uniforms: { ...this.uniforms, uColor: { value: new THREE.Color(b.color) } },
+        vertexShader: /* glsl */ `
+          varying float vH; varying vec3 vN; varying vec3 vView;
+          void main() {
+            vH = position.y / 70.0;
+            vN = normalize(normalMatrix * normal);
+            vec4 mv = modelViewMatrix * vec4(position, 1.0);
+            vView = normalize(-mv.xyz);
+            gl_Position = projectionMatrix * mv;
+          }`,
+        fragmentShader: /* glsl */ `
+          uniform vec3 uColor; uniform float uTime;
+          varying float vH; varying vec3 vN; varying vec3 vView;
+          void main() {
+            float rim = 1.0 - abs(dot(vN, vView));
+            float a = pow(rim, 1.5) * (1.0 - vH) * (0.55 + 0.45 * sin(vH * 30.0 - uTime * 3.0));
+            gl_FragColor = vec4(uColor * a * 1.6, a);
+          }`,
+      });
+      const beam = new THREE.Mesh(beamGeo, mat);
+      beam.position.copy(b.pos);
+      beam.frustumCulled = false;
+      beam.renderOrder = 7;
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: b.color, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+      ring.position.copy(b.pos).y += 0.12;
+      this.scene.add(beam, ring);
+      b.beam = beam;
+      b.ring = ring;
+    }
+  }
+
+  setVisible(on) {
+    for (const b of this.list) { b.beam.visible = on; b.ring.visible = on; }
+  }
+
+  /** Nearest beacon within `range` metres of p, or null. */
+  near(p, range = 16) {
+    let best = null, bd = range * range;
+    for (const b of this.list) {
+      const d = (b.pos.x - p.x) ** 2 + (b.pos.z - p.z) ** 2;
+      if (d < bd && Math.abs(b.pos.y - p.y) < 8) { bd = d; best = b; }
+    }
+    return best;
+  }
+
+  update(dt) {
+    this.time += dt;
+    this.uniforms.uTime.value = this.time;
+    const s = 1 + Math.sin(this.time * 3) * 0.08;
+    for (const b of this.list) b.ring.scale.setScalar(s);
+  }
+}
+
 export function formatTime(sec) {
   if (sec == null || !isFinite(sec)) return '--:--.---';
   const m = Math.floor(sec / 60);
@@ -278,7 +367,22 @@ export class EventManager {
       this.ui.wrongWay(this.wrongWayTime > 0.8);
     } else this.ui.wrongWay(false);
 
+    // live leaderboard (gap to the leader in seconds at the leader's pace)
+    let board = null;
+    if (this.def.type === 'race' && (this._boardT = (this._boardT || 0) - dt) <= 0) {
+      this._boardT = 0.25;
+      const leader = order[0];
+      const pace = Math.max(12, leader.vehicle.speedAbs);
+      board = order.map((r, i) => ({
+        pos: i + 1, name: r.driver ? r.name : 'YOU', player: !r.driver,
+        gap: r.finished ? 'FIN' : i === 0 ? (leader.finished ? 'FIN' : 'LEAD') : leader.finished ? '' : `+${(((leader.progress - r.progress) * route.spacing) / pace).toFixed(1)}s`,
+      }));
+    }
+    const fin = route.finishIndex ?? route.count - 1;
     this.ui.updateRaceHUD({
+      board,
+      sprint: this.sprint,
+      progress: this.sprint ? Math.max(0, Math.min(1, pr.rel / Math.max(1, fin - route.startIndex))) : 0,
       type: this.def.type,
       position: pr.position,
       total: this.racers.length,

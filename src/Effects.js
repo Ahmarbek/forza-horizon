@@ -159,6 +159,20 @@ export class Effects {
     }
   }
 
+  /** Flames from the exhaust tips (hard upshift). */
+  backfire(v) {
+    _c.setRGB(1, 0.45, 0.12);
+    const back = _dir.copy(v.forward).multiplyScalar(-2.35);
+    for (let k = 0; k < 14; k++) {
+      const s = 3 + Math.random() * 3;
+      const side = (k % 2 ? 1 : -1) * 0.3;
+      this._emit(
+        v.root.position.x + back.x + v.forward.z * side, v.root.position.y - 0.35, v.root.position.z + back.z - v.forward.x * side,
+        v.velocity.x - v.forward.x * s, 0.3 + Math.random(), v.velocity.z - v.forward.z * s,
+        0.12 + Math.random() * 0.08, -0.22, 0, _c, 1, 3, 0);
+    }
+  }
+
   /**
    * @param {number} dt
    * @param {Vehicle[]} vehicles cars to emit for (player first)

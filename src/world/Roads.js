@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './Noise.js';
+import { ChunkedInstances } from './Instancing.js';
 
 /**
  * Roads.js
@@ -431,19 +432,14 @@ export class RoadNetwork {
       addRails(r, extra, r.rails);
     }
 
-    const mesh = new THREE.InstancedMesh(railGeo, railMat, list.length);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+    const q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
     const half = new THREE.Vector3(0.1, 0.45, 2.05);
-    list.forEach((r, i) => {
-      q.setFromAxisAngle(up, r.yaw + (r.side < 0 ? Math.PI : 0));
-      mesh.setMatrixAt(i, m.compose(p.set(r.x, r.y, r.z), q, s));
-      this.physics.addStaticBox(p.set(r.x, r.y + 0.45, r.z), half, r.yaw);
+    for (const r of list) this.physics.addStaticBox(p.set(r.x, r.y + 0.45, r.z), half, r.yaw);
+    this.railChunks = new ChunkedInstances(this.scene, railGeo, railMat, list, {
+      chunk: 300,
+      write: (r, m) => { q.setFromAxisAngle(up, r.yaw + (r.side < 0 ? Math.PI : 0)); m.compose(p.set(r.x, r.y, r.z), q, s); },
     });
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.computeBoundingSphere();
-    this.scene.add(mesh);
     this.railCount = list.length;
     this.instanceCount += list.length;
   }

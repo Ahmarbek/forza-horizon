@@ -78,8 +78,8 @@ export class Terrain {
     return z;
   }
 
-  addFlatCircle(x, z, r, falloff = 80, y = 'auto') {
-    const zone = { type: 'circle', x, z, r, falloff, y };
+  addFlatCircle(x, z, r, falloff = 80, y = 'auto', junction = false) {
+    const zone = { type: 'circle', x, z, r, falloff, y, junction, claimed: false };
     if (y === 'auto') {
       // average of the surrounding (already levelled) ground, so a junction
       // next to a town or another junction agrees with it
@@ -96,6 +96,8 @@ export class Terrain {
   _flat(x, z) {
     let w = 0, y = 0;
     for (const f of this.flatZones) {
+      // while a road is being profiled, junctions it hasn't claimed yet don't bend it
+      if (f.junction && !f.claimed && this._ignoreUnclaimed) continue;
       let d;
       if (f.type === 'rect') {
         const dx = Math.max(f.minX - x, 0, x - f.maxX);
@@ -234,6 +236,9 @@ export class Terrain {
   build(routes) {
     // 1) Route elevation profiles: sample base height, smooth, limit grade.
     //    Samples over water are lifted onto a bridge deck.
+    // Routes arrive in priority order (main roads before connectors). A junction
+    // takes its height from the first road that reaches it; later roads meet it.
+    this._ignoreUnclaimed = true;
     for (const r of routes) {
       const n = r.count;
       const raw = new Float32Array(n);
@@ -253,10 +258,12 @@ export class Terrain {
       for (let i = 0; i < n; i++) if (wet[i]) h[i] = Math.max(h[i], raw[i]);
       // keep flat-zone parts level (junctions, towns) and pin them …
       const fixed = new Uint8Array(n);
+      const pinW = new Float32Array(n);
       for (let i = 0; i < n; i++) {
         const f = this._flat(r.xs[i], r.zs[i]);
         if (f.w > 0 && !wet[i]) h[i] += (f.y - h[i]) * f.w;
         if (f.w > 0.97 || r.flat) fixed[i] = 1;
+        pinW[i] = wet[i] ? 0 : f.w;
       }
       // … then limit the grade between the pins, forward & backward, so nothing
       // is left as a step (hills in between get cut down instead)
@@ -269,7 +276,28 @@ export class Terrain {
         for (let k = 1; k < n * laps; k++) { const i = k % n; if (!pin || !fixed[i]) h[i] = clampTo(h[i], h[(i - 1 + n) % n], maxStep); }
         for (let k = n * laps - 2; k >= 0; k--) { const i = k % n; if (!pin || !fixed[i]) h[i] = clampTo(h[i], h[(i + 1) % n], maxStep); }
       }
+      // vertical curves: round off crests and dips so fast cars don't take off.
+      // Junctions/towns/bridges fade back in by their flat-zone weight (no steps),
+      // then one last grade clamp.
+      if (!r.flat) {
+        const vc = Math.max(3, Math.round(30 / r.spacing));
+        let sm = movingAverage(h, vc, r.closed);
+        sm = movingAverage(sm, vc, r.closed);
+        for (let i = 0; i < n; i++) {
+          h[i] = sm[i] + (h[i] - sm[i]) * pinW[i];
+          if (wet[i]) h[i] = Math.max(h[i], raw[i] - 3); // decks keep clearance over the water
+        }
+        for (let k = 1; k < n * laps; k++) { const i = k % n; h[i] = clampTo(h[i], h[(i - 1 + n) % n], maxStep); }
+        for (let k = n * laps - 2; k >= 0; k--) { const i = k % n; h[i] = clampTo(h[i], h[(i + 1) % n], maxStep); }
+      }
       r.setHeights(h);
+      if (!r.flat) {
+        for (const z of this.flatZones) {
+          if (!z.junction || z.claimed) continue;
+          const i = r.nearestIndex(z.x, z.z);
+          if (r.lastDistanceSq < (r.width / 2 + 25) ** 2) { z.y = r.ys[i]; z.claimed = true; }
+        }
+      }
       // bridge spans: over water (or where the deck floats well above ground)
       const bridge = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
@@ -292,6 +320,8 @@ export class Terrain {
       }
       r.bridge = hasBridge ? b2 : null;
     }
+
+    this._ignoreUnclaimed = false;
 
     // 2) Distance field from roads onto grid vertices (splat each sample)
     const n1 = this.n1, cell = this.cell, half = this.half;
