@@ -390,7 +390,7 @@ class App {
       pos.y += 1.2;
       v.reset(pos, route.yaw(i));
     } else {
-      const n = env.nearestRoad(p.x, p.z);
+      const n = env.nearestRoad(p.x, p.z, p.y);
       // route height wins on bridges (the ground may be a lake bed below)
       n.point.y = Math.max(n.route ? n.point.y : -1e9, env.heightAt(n.point.x, n.point.z)) + 1.2;
       v.reset(n.point, n.yaw);
@@ -464,10 +464,13 @@ class App {
         break;
       case 'travel': {
         if (this.events.active) { this.ui.toast('Finish or quit the event first'); break; }
-        const route = this.env.routes[data];
-        const i = route.startIndex - Math.round(40 / route.spacing);
-        const pos = route.point(i, data === 'highway' ? -4.4 : 0, new THREE.Vector3());
-        pos.y += 1.2;
+        const route = this.env.routes[data] || this.env.roads.all.find((r) => r.id === data);
+        if (!route) break;
+        // sprint roads drop you near the top end (the ski resort, the lake), loops just before the start line
+        const i = route._wrap(data === 'summit' ? route.finishIndex - Math.round(30 / route.spacing)
+          : route.closed ? route.startIndex - Math.round(40 / route.spacing) : Math.round(route.count * 0.35));
+        const pos = route.point(i, data === 'highway' ? -4.4 : route.elevated ? -3.8 : 0, new THREE.Vector3());
+        pos.y = (route.bridge && route.bridge[i] ? route.ys[i] : Math.max(route.ys[i], this.env.heightAt(pos.x, pos.z))) + 1.2;
         this.vehicle.reset(pos, route.yaw(i));
         this.cameraCtl.snap(this.vehicle);
         this.stunts.reset();

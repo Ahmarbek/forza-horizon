@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mulberry32, fbm } from './Noise.js';
-import { TERRAIN_NOISE, LAKE } from './Terrain.js';
+import { TERRAIN_NOISE, LAKE, snowLineAt } from './Terrain.js';
 import { ChunkedInstances } from './Instancing.js';
 
 /**
@@ -36,6 +36,7 @@ const REGION = {
   sakura: [0.5, 0.5, 1, 1],
   needle: [0, 0, 0.5, 0.5],
   maple: [0.5, 0.25, 0.75, 0.5],
+  ginkgo: [0.5, 0, 0.75, 0.25],
   bark: [0.75, 0, 1, 0.5],
 };
 
@@ -138,6 +139,7 @@ export class Vegetation {
     quad(REGION.sakura, ['#ffc6d9', '#ffb3ca', '#ffd9e6', '#f7a1bd', '#ffe6ef', '#fbd0dd'], { count: 700, size: 15, twigs: 10, twig: '#4a3028', shape: 'petal' });
     quad(REGION.needle, ['#1d3a1c', '#264a25', '#183018', '#30592c', '#223f20'], { count: 1300, size: 20, twigs: 6, twig: '#3a2a1e', shape: 'needle' });
     sprig(rect(REGION.maple), ['#c2361e', '#d8501f', '#e57a25', '#a8261a', '#f09a2a'], { count: 380, size: 16, twigs: 7, twig: '#3b261c', shape: 'maple' });
+    sprig(rect(REGION.ginkgo), ['#f2c21b', '#e8a912', '#ffd84a', '#d99a0e', '#f7d35c'], { count: 420, size: 15, twigs: 7, twig: '#4a3526' });
     // bark strip
     const B = rect(REGION.bark);
     ctx.fillStyle = '#4a3a2e';
@@ -198,7 +200,7 @@ export class Vegetation {
     const rnd = this.rng;
     // pick one of the 2×2 sprig variants inside the region
     let [u0, v0, u1, v1] = region;
-    if (region !== REGION.maple) {
+    if (region !== REGION.maple && region !== REGION.ginkgo) {
       const s = Math.floor(rnd() * 4);
       const hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
       u0 += (s % 2) * hu; v0 += Math.floor(s / 2) * hv; u1 = u0 + hu; v1 = v0 + hv;
@@ -351,10 +353,13 @@ export class Vegetation {
       { type: 'sakura', ...this._deciduous({ H: 6.5, trunkFrac: 0.3, limbs: 3, spread: [0.8, 1.1], limbLen: 0.6, region: REGION.sakura, clusterCards: 8, cardSize: 1.7, droop: 0.1, crownFlat: 0.7 }) },
       { type: 'maple', ...this._deciduous({ H: 8.5, trunkFrac: 0.35, limbs: 4, spread: [0.55, 0.95], limbLen: 0.42, region: REGION.maple, clusterCards: 8, cardSize: 1.6 }) },
       { type: 'maple', ...this._deciduous({ H: 7, trunkFrac: 0.32, limbs: 4, spread: [0.6, 1.0], limbLen: 0.45, region: REGION.maple, clusterCards: 8, cardSize: 1.5 }) },
+      // ginkgo: tall, narrow, upswept crown of gold fans (Ginkgo Avenue)
+      { type: 'ginkgo', ...this._deciduous({ H: 11, trunkFrac: 0.3, limbs: 5, spread: [0.25, 0.5], limbLen: 0.36, region: REGION.ginkgo, clusterCards: 8, cardSize: 1.8 }) },
+      { type: 'ginkgo', ...this._deciduous({ H: 9, trunkFrac: 0.28, limbs: 5, spread: [0.3, 0.55], limbLen: 0.38, region: REGION.ginkgo, clusterCards: 8, cardSize: 1.7 }) },
     ];
     variants.forEach((v, i) => { v.index = i; });
     this.variants = variants;
-    this.byType = { broad: [0, 1, 2], pine: [3, 4, 5], sakura: [6, 7], maple: [8, 9] };
+    this.byType = { broad: [0, 1, 2], pine: [3, 4, 5], sakura: [6, 7], maple: [8, 9], ginkgo: [10, 11] };
     return variants;
   }
 
@@ -556,7 +561,7 @@ export class Vegetation {
         if (t.maskAt(px, pz, 0) > 0.02 || t.maskAt(px, pz, 1) > 0.5) continue;
         if (avoid && avoid(px, pz)) continue;
         const y = t.heightAt(px, pz);
-        if (y > t.snowLine - 40) continue;
+        if (y > snowLineAt(pz) - 40) continue;
         const nrm = t.normalAt(px, pz, new THREE.Vector3());
         if (nrm.y < 0.8) continue;
         const dFest = Math.hypot(px - festivalCenter.x, pz - festivalCenter.z);
@@ -574,7 +579,7 @@ export class Vegetation {
       const list = this.byType[s.type] || this.byType.broad;
       s.v = list[Math.floor(rnd() * list.length)];
       s.tint = 0.84 + rnd() * 0.3;
-      this.treePositions.push(s.x, s.z, s.type === 'sakura' ? 1 : s.type === 'pine' ? 2 : s.type === 'maple' ? 3 : 0);
+      this.treePositions.push(s.x, s.z, s.type === 'sakura' ? 1 : s.type === 'pine' ? 2 : s.type === 'maple' || s.type === 'ginkgo' ? 3 : 0);
       this.physics.addStaticCylinder(new THREE.Vector3(s.x, s.y, s.z), (s.type === 'pine' ? 0.3 : 0.35) * s.s, 2.5);
     }
     this.spots = spots;
@@ -744,6 +749,7 @@ export class Vegetation {
       uSnow: { value: t.snowLine },
       uSea: { value: t.waterLevel ?? -2 },
       uLake: { value: LAKE.level },
+      uLakeC: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r * 1.5) },
     };
     const u = this.grassUniforms;
     // standard (not Lambert) so blades get the same sky irradiance as the terrain under them
@@ -763,6 +769,7 @@ export class Vegetation {
           uniform float uSnow;
           uniform float uSea;
           uniform float uLake;
+          uniform vec3 uLakeC;
           varying float vTip;
           varying float vFar;
           varying vec3 vGrassCol;
@@ -791,9 +798,9 @@ export class Vegetation {
           float h0 = hAt(wp);
           float slope = abs(hAt(wp + vec2(2.0, 0.0)) - h0) + abs(hAt(wp + vec2(0.0, 2.0)) - h0);
           float keep = (1.0 - smoothstep(0.02, 0.2, mk.r)) * (1.0 - mk.g) * (1.0 - smoothstep(0.6, 1.2, slope))
-                     * (1.0 - smoothstep(uSnow - 60.0, uSnow - 20.0, h0))
+                     * (1.0 - smoothstep(uSnow - 160.0 * smoothstep(2400.0, 3200.0, wp.y) - 60.0, uSnow - 160.0 * smoothstep(2400.0, 3200.0, wp.y) - 20.0, h0))
                      * (1.0 - smoothstep(0.25, 0.5, mk2.r) * max(1.0 - smoothstep(uSea + 3.0, uSea + 6.0, h0),
-                                                                   step(1500.0, wp.y) * (1.0 - smoothstep(uLake + 1.6, uLake + 3.0, h0))))
+                                                                   step(length(wp - uLakeC.xy), uLakeC.z) * (1.0 - smoothstep(uLake + 1.6, uLake + 3.0, h0))))
                      * (1.0 - smoothstep(0.4, 0.7, mk2.g));
           float clump = tnoise(wp * 0.08);
           keep *= smoothstep(0.15, 0.38, clump + aOff.w * 0.2);

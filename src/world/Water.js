@@ -151,7 +151,7 @@ export class Water {
   build() {
     // Ocean: a big plane from the coast out to the horizon
     const ocean = new THREE.Mesh(new THREE.PlaneGeometry(26000, 34000, 1, 1).rotateX(-Math.PI / 2), this._material(SEA_LEVEL, false));
-    ocean.position.set(1900 + 13000, SEA_LEVEL, 0);
+    ocean.position.set(-(1950 + 13000), SEA_LEVEL, 0); // the sea lies east (-x)
     ocean.renderOrder = 1;
     ocean.receiveShadow = true;
     ocean.name = 'Ocean';

@@ -4,17 +4,20 @@ import { fbm, ridged, smoothstep, mulberry32 } from './Noise.js';
 /**
  * Terrain.js
  * ----------
- * 8 km × 8 km height-field world:
- *  - Rolling countryside around the festival, a hill range for Fuji Pass,
- *    the snowy Summit massif (south-east), the wind-farm downs (north-west),
- *    Kiso forest foothills (east) and ridged border ranges on three sides
- *  - The west side falls away into the ocean: coastal lowlands, sandy beaches,
- *    a stretch of sea cliffs and a sloping sea bed
- *  - Lake Sakura sits in a basin in the north with shelving shores
- *  - Flat zones (towns, festival, airfield, junctions) are levelled
+ * 8 km × 8 km height-field world laid out like a compact "Horizon Japan"
+ * (east is -x, north is +z):
+ *  - East coast: the ocean, with Tokyo's straight sea wall and docks, the
+ *    bays and fishing coves of Ito further south, and sea cliffs to the north
+ *  - Legend Island offshore, east of Tokyo
+ *  - Ohtani (centre, Horizon Festival), the Minamino and Hokubu rice plains,
+ *    the Shimanoyama highlands with a crater lake in the north-west, the
+ *    forested Nangan hills in the south and the snowy Takashiro / Sotoyama
+ *    Alps along the northern edge; ridged border ranges west and south
+ *  - Flat zones (towns, festival, junctions) are levelled
  *  - Roads carve their own bed: every route gets a smoothed, grade-limited
  *    elevation profile and nearby terrain blends into it; where a road crosses
- *    water the profile lifts onto a bridge deck and the terrain is left alone
+ *    water or a valley the profile lifts onto a bridge deck and the terrain is
+ *    left alone. Elevated routes (expressways) keep a fixed deck profile.
  *  - One grid feeds both the render meshes and Rapier's heightfield collider,
  *    triangulated identically so wheels sit exactly on the visible ground
  *  - Rendering: 16 × 16 tiles with 4 distance LODs (skirted so seams never
@@ -31,13 +34,29 @@ const TILE_CELLS = 64; // 512 m render tiles
 const LOD_STEPS = [1, 2, 4, 8];
 
 export const SEA_LEVEL = -2;
-export const COAST_X = 2780;
-export const LAKE = { x: 200, z: 2750, r: 430, level: 8 };
-export const FARMLAND = { minX: 900, maxX: 2350, minZ: -3250, maxZ: -1750 };
+export const SNOW_LINE = 330;
+/** The snow line drops towards the north (the Alps are snowy right down to the ski resort). */
+export function snowLineAt(z) {
+  return SNOW_LINE - 160 * smoothstep(2400, 3200, z);
+}
+/** Shimanoyama crater lake. */
+export const LAKE = { x: 2050, z: 1650, r: 330, level: 118 };
+/** Legend Island, offshore east of Tokyo. */
+export const ISLAND = { x: -3560, z: -490, r: 370 };
+/** Rice plains (paddies + crop fields): Minamino, Hokubu, the Ito back-country. */
+export const FARMLANDS = [
+  { minX: 700, maxX: 2500, minZ: -1950, maxZ: -350, name: 'Minamino' },
+  { minX: -1450, maxX: 1050, minZ: 1150, maxZ: 2250, name: 'Hokubu' },
+  { minX: -2350, maxX: -1500, minZ: -2950, maxZ: -2050, name: 'Ito' },
+];
 
-/** x of the shoreline at a given z (sea lies at larger x). */
+/** x of the shoreline at a given z; the sea lies EAST of it (smaller x). */
 export function coastLine(z) {
-  return COAST_X + 170 * fbm(z / 1300, 7.7, 3) + 70 * Math.sin(z / 640);
+  const tokyo = smoothstep(-1750, -1350, z) * (1 - smoothstep(250, 700, z)); // straight sea wall along the city
+  const south = smoothstep(-2500, -3700, z); // the Ito coast bends inland
+  const north = smoothstep(2000, 3200, z);
+  const wig = 170 * fbm(z / 1300, 7.7, 3) + 70 * Math.sin(z / 640) + 55 * Math.sin(z / 190 + 1.3) * south;
+  return -2860 + 520 * south - 250 * north + wig * (1 - tokyo) + 60 * tokyo;
 }
 
 /** Lake radius in a given direction (irregular shoreline). */
@@ -45,9 +64,9 @@ export function lakeRadius(angle) {
   return LAKE.r * (1 + 0.17 * fbm(Math.cos(angle) * 1.3 + 5, Math.sin(angle) * 1.3 - 2, 3));
 }
 
-/** 0..1 how "cliffy" the coast is at z (a northern stretch of sea cliffs). */
+/** 0..1 how "cliffy" the coast is at z (the northern coast below the Alps). */
 function cliffFactor(z) {
-  return smoothstep(700, 1300, z) * (1 - smoothstep(2500, 3100, z));
+  return smoothstep(1300, 1900, z);
 }
 
 export class Terrain {
@@ -60,7 +79,7 @@ export class Terrain {
     this.heights = new Float32Array(this.n1 * this.n1); // [iz * n1 + ix]
     this.flatZones = [];
     this.waterLevel = SEA_LEVEL;
-    this.snowLine = 230;
+    this.snowLine = SNOW_LINE;
     this.lake = LAKE;
   }
 
@@ -121,11 +140,15 @@ export class Terrain {
   }
 
   farmWeight(x, z) {
-    const F = FARMLAND;
-    const dx = Math.max(F.minX - x, 0, x - F.maxX);
-    const dz = Math.max(F.minZ - z, 0, z - F.maxZ);
-    const edge = fbm(x / 300 + 4, z / 300, 2) * 60;
-    return 1 - smoothstep(0, 140, Math.hypot(dx, dz) + edge);
+    let best = 0;
+    for (const F of FARMLANDS) {
+      const dx = Math.max(F.minX - x, 0, x - F.maxX);
+      const dz = Math.max(F.minZ - z, 0, z - F.maxZ);
+      if (dx > 400 || dz > 400) continue;
+      const edge = fbm(x / 300 + 4, z / 300, 2) * 60;
+      best = Math.max(best, 1 - smoothstep(0, 140, Math.hypot(dx, dz) + edge));
+    }
+    return best;
   }
 
   isFarmland(x, z) {
@@ -134,56 +157,67 @@ export class Terrain {
 
   /** Natural relief (metres) before flat zones and roads. */
   _rawHeight(x, z) {
+    const g = Math.exp;
     // rolling countryside
     let h = fbm(x / 820, z / 820, 5) * 42 + fbm(x / 230 + 40, z / 230 - 12, 4) * 7;
     h = Math.max(h, -6) + 6;
-    // Fuji Pass hill range (south-east of the festival)
-    const mx = (x + 780) / 520, mz = (z + 640) / 470;
-    h += Math.exp(-(mx * mx + mz * mz)) * (95 + fbm(x / 300, z / 300) * 25);
-    // eastern downs between the festival and the coast
-    const ex = (x - 1180) / 380, ez = (z - 420) / 520;
-    h += Math.exp(-(ex * ex + ez * ez)) * 48;
-    // Summit massif
-    const sx = (x + 1650) / 850, sz = (z + 3050) / 760;
-    h += Math.exp(-(sx * sx + sz * sz)) * (240 + ridged(x / 520 + 3, z / 520) * 200);
-    // wind-farm downs
-    const wx = (x - 1650) / 650, wz = (z - 2350) / 750;
-    h += Math.exp(-(wx * wx + wz * wz)) * 62;
-    // Kiso forest foothills
-    const kx = (x + 2800) / 700, kz = (z - 300) / 1300;
-    h += Math.exp(-(kx * kx + kz * kz)) * 48;
-    // border ranges north / east / south (the west opens to the ocean)
-    const edge = Math.max(smoothstep(3250, 3950, z), smoothstep(3250, 3950, -x), smoothstep(3150, 3950, -z));
+    // Ohtani Pass hills (north of the festival)
+    const mx = (x + 380) / 500, mz = (z - 690) / 430;
+    h += g(-(mx * mx + mz * mz)) * (95 + fbm(x / 300, z / 300) * 25);
+    // Shimanoyama highlands around the crater lake (north-west)
+    const sx = (x - 2050) / 1150, sz = (z - 1600) / 950;
+    h += g(-(sx * sx + sz * sz)) * (125 + ridged(x / 420, z / 420 + 5) * 70);
+    // western downs (wind farm)
+    const wx = (x - 2850) / 600, wz = (z + 250) / 900;
+    h += g(-(wx * wx + wz * wz)) * 70;
+    // Nangan: forested southern hills
+    const nx = (x - 700) / 1600, nz = (z + 2850) / 650;
+    h += g(-(nx * nx + nz * nz)) * (85 + ridged(x / 500 - 7, z / 500) * 90);
+    // Ito coastal hills (behind the fishing towns)
+    const ix = (x + 1750) / 520, iz = (z + 3050) / 700;
+    h += g(-(ix * ix + iz * iz)) * 75;
+    // Takashiro / Sotoyama Alps along the north
+    const alps = smoothstep(2350, 3400, z);
+    if (alps > 0) {
+      h += alps * (230 + ridged(x / 640 + 2, z / 640) * 430 + fbm(x / 260, z / 260, 3) * 40);
+      // the Sotoyama ski valley: a smooth, even climb the Skyline can follow up to the resort
+      const cor = Math.exp(-(((x + 380) / 560) ** 2)) * (1 - smoothstep(3200, 3550, z)) * smoothstep(2150, 2450, z);
+      if (cor > 0) h += (18 + 175 * smoothstep(2250, 3150, z) + fbm(x / 300, z / 300, 2) * 8 - h) * cor;
+    }
+    // border ranges west and south (the east opens to the ocean)
+    const edge = Math.max(smoothstep(3250, 3950, x), smoothstep(3150, 3950, -z) * smoothstep(-2300, -1300, x));
     if (edge > 0) h += edge * (170 + ridged(x / 700, z / 700) * 430);
     // farmland: gentle terraces
     const fw = this.farmWeight(x, z);
     if (fw > 0) h += (h * 0.25 + 5 - h) * fw;
     h = this._lakeBasin(x, z, h);
+    // keep inland ground above the sea (the ocean plane reaches under the coast)
+    if (coastLine(z) - x < -170) h = Math.max(h, 1.5);
     h = this._coast(x, z, h);
+    h = this._island(x, z, h);
     return h;
   }
 
+  /** Crater lake: a smooth bowl around the water, shelving shores inside. */
   _lakeBasin(x, z, h) {
     const dx = x - LAKE.x, dz = z - LAKE.z;
     const d = Math.hypot(dx, dz);
-    if (d > LAKE.r * 1.25 + 750) return h;
+    if (d > LAKE.r * 1.25 + 700) return h;
     const R = lakeRadius(Math.atan2(dz, dx));
     const L = LAKE.level;
-    // the land around the basin stays a few metres above the water
-    const rim = 1 - smoothstep(R + 150, R + 700, d);
-    const minLand = L + 2.5 + Math.max(0, d - R) * 0.03;
-    if (h < minLand) h += (minLand - h) * rim;
+    const bowl = L + 2 + Math.max(0, d - R) * 0.2;
+    h += (bowl - h) * (1 - smoothstep(R + 40, R + 680, d));
     if (d < R + 50) {
       const shore = smoothstep(R + 50, R - 4, d);
       h += (L + 0.7 - h) * shore;
       if (d < R) h = Math.min(h, L + 0.7 - (R - d) * 0.085);
-      h = Math.max(h, L - 13);
+      h = Math.max(h, L - 14);
     }
     return h;
   }
 
   _coast(x, z, h) {
-    const dx = x - coastLine(z);
+    const dx = coastLine(z) - x; // > 0 out at sea
     if (dx < -650) return h;
     const c = cliffFactor(z);
     // lowlands: hills ease down towards the shore
@@ -206,11 +240,31 @@ export class Terrain {
     return Math.max(normal + (cliff - normal) * blend, SEA_LEVEL - 48);
   }
 
+  /** Legend Island rises out of the sea: beach ring, grassy crown. */
+  _island(x, z, h) {
+    const dx = x - ISLAND.x, dz = z - ISLAND.z;
+    const d = Math.hypot(dx, dz);
+    if (d > ISLAND.r + 260) return h;
+    const R = ISLAND.r * (1 + 0.1 * fbm(Math.cos(Math.atan2(dz, dx)) * 1.7 + 2, Math.sin(Math.atan2(dz, dx)) * 1.7, 2));
+    const crown = 3.2 + 26 * Math.pow(1 - smoothstep(0, R, d), 1.3) + fbm(x / 120, z / 120, 3) * 6;
+    // grassy crown → flat sandy beach → shelving sea bed
+    let land;
+    if (d < R - 30) land = 2.4 + (crown - 2.4) * smoothstep(R - 30, R - 120, d);
+    else if (d < R + 20) land = 2.4 + ((SEA_LEVEL - 1.2 - 2.4) * (d - (R - 30))) / 50;
+    else land = SEA_LEVEL - 1.2 - (d - R - 20) * 0.08;
+    return Math.max(h, land);
+  }
+
   /** Natural relief with flat zones applied. */
   baseHeight(x, z) {
     let h = this._rawHeight(x, z);
     const f = this._flat(x, z);
     if (f.w > 0) h += (f.y - h) * f.w;
+    // Tokyo's sea wall: the quay drops straight into deep water
+    if (z > -1420 && z < 330) {
+      const dc = coastLine(z) - x;
+      if (dc > -2) h = Math.min(h, SEA_LEVEL - 6 - dc * 0.05);
+    }
     return h;
   }
 
@@ -219,7 +273,8 @@ export class Terrain {
     const dx = x - LAKE.x, dz = z - LAKE.z;
     const d = Math.hypot(dx, dz);
     if (d < LAKE.r * 1.3 && d < lakeRadius(Math.atan2(dz, dx)) + 2) return LAKE.level;
-    if (x > coastLine(z) - 60) return SEA_LEVEL;
+    if (x < coastLine(z) + 60) return SEA_LEVEL;
+    if (Math.hypot(x - ISLAND.x, z - ISLAND.z) < ISLAND.r * 1.35) return SEA_LEVEL;
     return null;
   }
 
@@ -241,6 +296,21 @@ export class Terrain {
     this._ignoreUnclaimed = true;
     for (const r of routes) {
       const n = r.count;
+      if (r.profile) {
+        // elevated expressways: fixed deck profile, bridge wherever it clears the ground
+        const h = new Float32Array(n);
+        for (let i = 0; i < n; i++) h[i] = r.profile(i * r.spacing, r.xs[i], r.zs[i], this, r);
+        r.setHeights(h);
+        const bridge = new Uint8Array(n);
+        let any = false;
+        for (let i = 0; i < n; i++) {
+          const g = this.baseHeight(r.xs[i], r.zs[i]);
+          const wl = this.waterLevelAt(r.xs[i], r.zs[i]);
+          if ((wl != null && g < wl + 1.2) || h[i] - g > (r.bridgeMin ?? 9)) { bridge[i] = 1; any = true; }
+        }
+        r.bridge = any ? bridge : null;
+        continue;
+      }
       const raw = new Float32Array(n);
       const wet = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
@@ -564,6 +634,7 @@ export class Terrain {
       const reach = hw + 26;
       const rc = Math.ceil(reach / px);
       for (let i = 0; i < r.count; i += 1) {
+        if (r.elevated && r.bridge && r.bridge[i]) continue; // nothing paved under an expressway deck
         const cx = Math.floor((r.xs[i] + this.half) / px), cz = Math.floor((r.zs[i] + this.half) / px);
         for (let dz = -rc; dz <= rc; dz++) {
           const iz = cz + dz;
@@ -612,7 +683,9 @@ export class Terrain {
       for (let ix = 0; ix < R2; ix++) {
         const k = iz * R2 + ix;
         const x = -this.half + (ix + 0.5) * px2, z = -this.half + (iz + 0.5) * px2;
-        let shore = smoothstep(-210, -120, x - coastLine(z));
+        let shore = z > -1420 && z < 330 ? 0 : smoothstep(-210, -120, coastLine(z) - x); // Tokyo: concrete quay, no beach
+        const di = Math.hypot(x - ISLAND.x, z - ISLAND.z);
+        if (di < ISLAND.r * 1.4) shore = Math.max(shore, smoothstep(ISLAND.r - 110, ISLAND.r - 40, di));
         const ld = Math.hypot(x - LAKE.x, z - LAKE.z);
         if (ld < LAKE.r * 1.5) shore = Math.max(shore, 1 - smoothstep(4, 30, ld - lakeRadius(Math.atan2(z - LAKE.z, x - LAKE.x))));
         d2[k * 4] = Math.round(255 * shore);
@@ -632,13 +705,16 @@ export class Terrain {
     return tex;
   }
 
-  /** Extra forest density per region (Kiso forest is dense, farmland/beach bare). */
+  /** Extra forest density per region (Nangan and the Alps' lower slopes are dense, plains/coast bare). */
   _forestBias(x, z) {
-    const kx = (x + 2750) / 800, kz = (z - 300) / 1500;
-    let b = Math.exp(-(kx * kx + kz * kz)) * 0.55;
+    const nx = (x - 700) / 1500, nz = (z + 2800) / 700;
+    let b = Math.exp(-(nx * nx + nz * nz)) * 0.55;
+    b += smoothstep(2250, 2700, z) * (1 - smoothstep(3000, 3300, z)) * 0.35;
+    const sx = (x - 2050) / 1100, sz = (z - 1650) / 900;
+    b += Math.exp(-(sx * sx + sz * sz)) * 0.3;
     b -= this.farmWeight(x, z) * 0.8;
-    const dx = x - coastLine(z);
-    b -= smoothstep(-500, -200, dx) * 0.6;
+    b -= smoothstep(-500, -200, coastLine(z) - x) * 0.6;
+    if (Math.hypot(x - ISLAND.x, z - ISLAND.z) < ISLAND.r) b -= 0.35;
     return b;
   }
 
@@ -687,6 +763,7 @@ export class Terrain {
       uSnowLine: { value: this.snowLine },
       uSea: { value: SEA_LEVEL },
       uLake: { value: LAKE.level },
+      uLakeC: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r * 1.5) },
       uTexA: { value: tex.a },
       uTexB: { value: tex.b },
       uTime: { value: 0 },
@@ -711,6 +788,7 @@ export class Terrain {
           uniform float uSnowLine;
           uniform float uSea;
           uniform float uLake;
+          uniform vec3 uLakeC;
           ${TERRAIN_NOISE}
           float gTerrainRough;
           float gTerrainWet;
@@ -799,14 +877,15 @@ export class Terrain {
             // beaches and shores: dry sand above, dark wet sand at the waterline
             float shore = mask2.r;
             float sandW = shore * (1.0 - smoothstep(2.6, 4.0, vWPos.y - uSea)) * (1.0 - rockW * 0.7);
-            float lakeSand = step(1500.0, p.y) * (1.0 - smoothstep(1.2, 2.4, vWPos.y - uLake)) * step(uLake - 14.0, vWPos.y) * shore;
+            float lakeSand = step(length(p - uLakeC.xy), uLakeC.z) * (1.0 - smoothstep(1.2, 2.4, vWPos.y - uLake)) * step(uLake - 14.0, vWPos.y) * shore;
             sandW = max(sandW, lakeSand);
             col = mix(col, sand * mix(1.0, dirtT.a * 1.8, detailFade), sandW);
-            float wetSand = max(1.0 - smoothstep(0.1, 0.9, vWPos.y - uSea), step(1500.0, p.y) * (1.0 - smoothstep(0.1, 0.8, vWPos.y - uLake))) * sandW;
+            float wetSand = max(1.0 - smoothstep(0.1, 0.9, vWPos.y - uSea), step(length(p - uLakeC.xy), uLakeC.z) * (1.0 - smoothstep(0.1, 0.8, vWPos.y - uLake))) * sandW;
             col *= 1.0 - wetSand * 0.45;
             gTerrainWet = max(gTerrainWet, wetSand);
             // snow caps
-            float snowW = smoothstep(uSnowLine - 30.0, uSnowLine + 40.0, vWPos.y + mid * 60.0) * (1.0 - smoothstep(0.3, 0.52, slope + (fine0(p) - 0.5) * 0.25));
+            float snowL = uSnowLine - 160.0 * smoothstep(2400.0, 3200.0, p.y);
+            float snowW = smoothstep(snowL - 30.0, snowL + 40.0, vWPos.y + mid * 60.0) * (1.0 - smoothstep(0.3, 0.52, slope + (fine0(p) - 0.5) * 0.25));
             col = mix(col, snow * (0.9 + 0.1 * macro), snowW);
             // urban paving
             col = mix(col, vec3(0.36, 0.36, 0.37), mask.g);

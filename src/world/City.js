@@ -5,13 +5,20 @@ import { CITY_RECT, CITY_STREET_STEP, CITY_STREET_WIDTH } from './Roads.js';
 
 const STYLE_PRESETS = {
   downtown: { tall: 1, signs: 1, warehouses: 0 },
+  tokyo: { tall: 1.15, signs: 1, warehouses: 0 },
   harbor: { tall: 0.12, signs: 0.45, warehouses: 1 },
 };
+
+/** Tokyo landmark spots (block centres). */
+export const TOKYO_TOWER = { x: -2012.5, z: -612.5 };
+export const SCRAMBLE = { x: -1950, z: -300 };
+export const GINKGO_X = -1825;
 
 /**
  * City.js
  * -------
- * "Neon City": a 1 km² downtown grid.
+ * Street-grid towns: Tokyo City (districts: Downtown, Dockyards, Industrial,
+ * Suburbs; Tokyo Tower, a scramble crossing, Ginkgo Avenue) and Ito harbour.
  *  - Asphalt base with painted lane lines, crosswalks and stop lines
  *  - Raised sidewalk blocks (with physics) and ~250 buildings on subdivided lots
  *  - One InstancedMesh for every building: facades are shaded procedurally
@@ -39,6 +46,9 @@ export class City {
     this.baseY = opts.baseY ?? 0;
     this.style = STYLE_PRESETS[opts.style ?? 'downtown'];
     this.parkIdx = opts.parks ?? [9, 27, 46, 58];
+    this.tokyo = !!opts.tokyo;
+    this.clear = opts.clear ?? null;
+    this.extras = []; // containers / tanks / chimneys (Tokyo)
     this.rng = mulberry32(opts.seed ?? 4242);
     this.buildings = []; // {x,z,w,d,h,style}
     this.blocks = [];
@@ -55,7 +65,25 @@ export class City {
     this._buildBuildings();
     this._buildSigns();
     this._buildStreetFurniture();
+    if (this.tokyo) {
+      this._buildDocks();
+      this._buildIndustry();
+      this._buildTokyoTower();
+      this._buildScramble();
+    }
     return this;
+  }
+
+  /** Tokyo district at x,z. */
+  districtAt(x, z) {
+    const R = this.rect;
+    if (!this.tokyo) return this.name;
+    if (x < R.minX + 250) return 'Dockyards';
+    if (z < R.minZ + 250) return 'Industrial';
+    if (x > R.maxX - 300 || z > R.maxZ - 250) return 'Suburbs';
+    if (Math.abs(x - GINKGO_X) < 20) return 'Ginkgo Avenue';
+    if (Math.hypot(x - SCRAMBLE.x, z - SCRAMBLE.z) < 90) return 'Shibuya Crossing';
+    return 'Downtown';
   }
 
   // ---------------------------------------------------------------- Layout
@@ -69,6 +97,15 @@ export class City {
     }
     // a few blocks become parks
     for (const i of this.parkIdx) if (this.blocks[i]) this.blocks[i].park = true;
+    if (this.tokyo) {
+      for (const b of this.blocks) {
+        const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+        if (Math.abs(cx - TOKYO_TOWER.x) < 5 && Math.abs(cz - TOKYO_TOWER.z) < 5) b.park = b.tower = true;
+        if (Math.abs(cx + 1637.5) < 5 && Math.abs(cz + 987.5) < 5) b.park = true; // a green square in the south
+        const d = this.districtAt(cx, cz);
+        b.district = d === 'Ginkgo Avenue' || d === 'Shibuya Crossing' ? 'Downtown' : d;
+      }
+    }
   }
 
   streetLines() {
@@ -208,31 +245,51 @@ export class City {
   // ------------------------------------------------------------- Buildings
   _buildBuildings() {
     const rng = this.rng;
-    const center = { x: (this.rect.minX + this.rect.maxX) / 2, z: (this.rect.minZ + this.rect.maxZ) / 2 };
+    const center = this.tokyo ? { x: -2000, z: -560 } : { x: (this.rect.minX + this.rect.maxX) / 2, z: (this.rect.minZ + this.rect.maxZ) / 2 };
     const list = [];
-    const split = (lot, depth) => {
+    const split = (lot, depth, district = 'Downtown') => {
       const w = lot.maxX - lot.minX, d = lot.maxZ - lot.minZ;
-      if (depth > 0 && (w > 34 || d > 34) && rng() < 0.85) {
+      const minLot = district === 'Suburbs' ? 16 : 34;
+      if (depth > 0 && (w > minLot || d > minLot) && rng() < 0.85) {
         const alongX = w > d ? rng() < 0.8 : rng() < 0.2;
         const t = 0.35 + rng() * 0.3;
         if (alongX) {
           const m = lot.minX + w * t;
-          split({ ...lot, maxX: m }, depth - 1);
-          split({ ...lot, minX: m }, depth - 1);
+          split({ ...lot, maxX: m }, depth - 1, district);
+          split({ ...lot, minX: m }, depth - 1, district);
         } else {
           const m = lot.minZ + d * t;
-          split({ ...lot, maxZ: m }, depth - 1);
-          split({ ...lot, minZ: m }, depth - 1);
+          split({ ...lot, maxZ: m }, depth - 1, district);
+          split({ ...lot, minZ: m }, depth - 1, district);
         }
         return;
       }
       const cx = (lot.minX + lot.maxX) / 2, cz = (lot.minZ + lot.maxZ) / 2;
+      // keep lots under the elevated expressways open
+      if (this.clear && this.clear(cx, cz, Math.max(w, d) / 2 + 3)) { this.openLots.push(lot); return; }
       const dc = Math.hypot(cx - center.x, cz - center.z);
       const downtown = Math.exp(-(dc * dc) / (330 * 330)) * this.style.tall;
       const setback = 1 + rng() * 2.5;
       const bw = w - setback * 2, bd = d - setback * 2;
-      if (bw < 8 || bd < 8) return;
+      if (bw < 6 || bd < 6) return;
       const y0 = this.baseY + CURB_H;
+      if (district === 'Dockyards') {
+        // container yards and big sheds by the water
+        if (rng() < 0.6) { this.containerLots.push(lot); return; }
+        list.push({ x: cx, z: cz, w: bw, d: bd, h: 10 + rng() * 8, style: 4, y: y0 });
+        return;
+      }
+      if (district === 'Industrial') {
+        if (rng() < 0.35) { this.tankLots.push(lot); return; }
+        list.push({ x: cx, z: cz, w: bw, d: bd, h: 9 + rng() * 14, style: 4, y: y0 });
+        return;
+      }
+      if (district === 'Suburbs') {
+        // low houses and small apartment blocks with pitched roofs
+        const h = rng() < 0.75 ? 6.2 + rng() * 2.4 : 9 + rng() * 6;
+        list.push({ x: cx, z: cz, w: bw, d: bd, h, style: rng() < 0.65 ? 2 : 3, y: y0, roof: h < 9.5 });
+        return;
+      }
       // harbour: the blocks nearest the sea are warehouses and sheds
       if (this.style.warehouses && cx > this.rect.maxX - this.step * 1.1 && rng() < 0.8) {
         list.push({ x: cx, z: cz, w: bw, d: bd, h: 8 + rng() * 6, style: 4, y: y0 });
@@ -251,9 +308,13 @@ export class City {
         list.push({ x: cx, z: cz, w: bw * s, d: bd * s, h: h * (0.15 + rng() * 0.25), style, y: y0 + h });
       }
     };
+    this.openLots = [];
+    this.containerLots = [];
+    this.tankLots = [];
     for (const b of this.blocks) {
       if (b.park) continue;
-      split({ minX: b.minX + SIDEWALK, maxX: b.maxX - SIDEWALK, minZ: b.minZ + SIDEWALK, maxZ: b.maxZ - SIDEWALK }, 2);
+      const d = b.district ?? 'Downtown';
+      split({ minX: b.minX + SIDEWALK, maxX: b.maxX - SIDEWALK, minZ: b.minZ + SIDEWALK, maxZ: b.maxZ - SIDEWALK }, d === 'Suburbs' ? 3 : 2, d);
     }
     this.buildings = list;
 
@@ -297,7 +358,7 @@ export class City {
       new THREE.CylinderGeometry(0.12, 0.12, 1.2, 6).translate(4, 0.6, 0),
     ]);
     const acMat = new THREE.MeshStandardMaterial({ color: 0x8e9196, roughness: 0.6, metalness: 0.4 });
-    const tops = list.filter((b) => b.w > 14 && b.d > 14);
+    const tops = list.filter((b) => b.w > 14 && b.d > 14 && !b.roof);
     const ac = new THREE.InstancedMesh(acGeo, acMat, tops.length);
     tops.forEach((b, i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.floor(rng() * 4) * Math.PI / 2);
@@ -306,6 +367,29 @@ export class City {
     ac.castShadow = true;
     ac.computeBoundingSphere();
     this.scene.add(ac);
+
+    // pitched tile roofs on the low houses (gable prism, unit size → scaled)
+    const roofed = list.filter((b) => b.roof);
+    if (roofed.length) {
+      const shape = new THREE.Shape();
+      shape.moveTo(-0.56, 0); shape.lineTo(0, 0.42); shape.lineTo(0.56, 0); shape.lineTo(-0.56, 0);
+      const roofGeo = new THREE.ExtrudeGeometry(shape, { depth: 1.08, bevelEnabled: false }).translate(0, 0, -0.54);
+      const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0.15 });
+      const rm = new THREE.InstancedMesh(roofGeo, roofMat, roofed.length);
+      const rc = new THREE.Color();
+      roofed.forEach((b, i) => {
+        const alongX = b.w > b.d;
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), alongX ? Math.PI / 2 : 0);
+        const span = alongX ? b.d : b.w, len = alongX ? b.w : b.d;
+        rm.setMatrixAt(i, m.compose(p.set(b.x, b.y + b.h, b.z), q, s.set(span, Math.min(span, 9), len)));
+        rm.setColorAt(i, rc.set(['#3b4148', '#4a3a36', '#2f3d4f', '#5a4a3a', '#6b2f2a'][Math.floor(rng() * 5)]));
+      });
+      rm.castShadow = true;
+      rm.receiveShadow = true;
+      rm.computeBoundingSphere();
+      this.scene.add(rm);
+      this.instanceCount += roofed.length;
+    }
   }
 
   _facadeMaterial() {
@@ -597,6 +681,7 @@ export class City {
     // Sidewalk trees (every 24 m on alternate streets) + park trees
     for (const b of this.blocks) {
       if (b.park) {
+        if (b.tower) continue;
         for (let k = 0; k < 14; k++) {
           this.treeSpots.push({
             x: b.minX + SIDEWALK + 4 + this.rng() * (b.maxX - b.minX - SIDEWALK * 2 - 8),
@@ -609,13 +694,311 @@ export class City {
       for (let x = b.minX + 12; x < b.maxX - 8; x += 24) {
         this.treeSpots.push({ x, z: b.minZ + 2.2, type: 'broad', small: true }, { x, z: b.maxZ - 2.2, type: 'broad', small: true });
       }
+      // Ginkgo Avenue: a tight double row of golden ginkgos down both sidewalks
+      if (this.tokyo && b.district === 'Downtown') {
+        for (const edge of [b.minX, b.maxX]) {
+          if (Math.abs(Math.abs(edge - GINKGO_X) - this.sw / 2) > 1) continue;
+          const x = edge + (edge < GINKGO_X ? -2.2 : 2.2);
+          for (let z = b.minZ + 6; z < b.maxZ - 4; z += 10) this.treeSpots.push({ x, z, type: 'ginkgo' });
+        }
+      }
     }
+  }
+
+  // --------------------------------------------------------------- Dockyards
+  _buildDocks() {
+    const rng = this.rng;
+    const boxes = [];
+    // container stacks in rows on the yard lots
+    for (const lot of this.containerLots) {
+      const w = lot.maxX - lot.minX, d = lot.maxZ - lot.minZ;
+      const alongX = w > d;
+      const L = 12.2, W = 2.44, H = 2.59;
+      const rows = Math.floor((alongX ? d : w) / (W + 0.6));
+      const cols = Math.floor((alongX ? w : d) / (L + 1.5));
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        if (rng() < 0.18) continue;
+        const stack = 1 + Math.floor(rng() * 4);
+        for (let k = 0; k < stack; k++) {
+          const a = (alongX ? lot.minX : lot.minZ) + 1 + c * (L + 1.5) + L / 2;
+          const b = (alongX ? lot.minZ : lot.minX) + 0.5 + r * (W + 0.6) + W / 2;
+          boxes.push({ x: alongX ? a : b, z: alongX ? b : a, y: this.baseY + CURB_H + k * H, yaw: alongX ? 0 : Math.PI / 2, h: stack * H });
+        }
+      }
+    }
+    const geo = new THREE.BoxGeometry(2.44, 2.59, 12.2).translate(0, 1.295, 0);
+    // corrugated side texture
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 16;
+    const ctx = c.getContext('2d');
+    for (let x = 0; x < 64; x++) { const v = 200 + 55 * Math.sin(x * 0.8); ctx.fillStyle = `rgb(${v},${v},${v})`; ctx.fillRect(x, 0, 1, 16); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(6, 1);
+    const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, metalness: 0.35 });
+    const im = new THREE.InstancedMesh(geo, mat, boxes.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const col = new THREE.Color();
+    const pal = ['#b6402b', '#2b5d9c', '#d8a426', '#3d7d4a', '#8a8f96', '#c95a1c', '#1f4f7a', '#e0e0dc', '#6b2d5c'];
+    boxes.forEach((b, i) => {
+      q.setFromAxisAngle(up, b.yaw);
+      im.setMatrixAt(i, m.compose(p.set(b.x, b.y, b.z), q, sc));
+      im.setColorAt(i, col.set(pal[Math.floor(rng() * pal.length)]));
+      if (b.y < this.baseY + 1) this.physics.addStaticBox(p.set(b.x, b.y + b.h / 2, b.z), new THREE.Vector3(1.22, b.h / 2, 6.1), b.yaw);
+    });
+    im.castShadow = true;
+    im.receiveShadow = true;
+    im.computeBoundingSphere();
+    this.scene.add(im);
+    this.instanceCount += boxes.length;
+
+    // ship-to-shore gantry cranes along the quay, booms out over the water
+    const craneMat = new THREE.MeshStandardMaterial({ color: 0xd0442c, roughness: 0.55, metalness: 0.4 });
+    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.6, metalness: 0.3 });
+    const legs = [], booms = [];
+    const x0 = this.rect.minX - 72; // on the quay, between the dock strip and the water
+    for (let z = this.rect.minZ + 120; z < this.rect.maxZ - 60; z += 230) {
+      for (const [dx, dz] of [[-9, -8], [-9, 8], [9, -8], [9, 8]]) legs.push(new THREE.BoxGeometry(1.4, 38, 1.4).translate(x0 + dx, 19, z + dz));
+      legs.push(new THREE.BoxGeometry(20, 1.6, 1.6).translate(x0, 20, z - 8), new THREE.BoxGeometry(20, 1.6, 1.6).translate(x0, 20, z + 8));
+      booms.push(new THREE.BoxGeometry(95, 3, 3).translate(x0 - 30, 40, z - 5), new THREE.BoxGeometry(95, 3, 3).translate(x0 - 30, 40, z + 5));
+      booms.push(new THREE.BoxGeometry(8, 7, 14).translate(x0 + 12, 43, z));
+      booms.push(new THREE.CylinderGeometry(0.25, 0.25, 22, 5).translate(x0 - 55, 29, z));
+      booms.push(new THREE.BoxGeometry(12, 2.6, 2.44).translate(x0 - 55, 17, z));
+      for (const [dx, dz] of [[-9, -8], [-9, 8], [9, -8], [9, 8]]) this.physics.addStaticBox(p.set(x0 + dx, 19, z + dz), new THREE.Vector3(0.7, 19, 0.7), 0);
+    }
+    const lm = new THREE.Mesh(mergeGeometries(legs), craneMat);
+    const bm = new THREE.Mesh(mergeGeometries(booms), whiteMat);
+    for (const mm of [lm, bm]) { mm.castShadow = true; mm.receiveShadow = true; this.scene.add(mm); }
+    // concrete quay edge along the water
+    const quay = new THREE.Mesh(new THREE.BoxGeometry(6, 7, this.rect.maxZ - this.rect.minZ + 120), new THREE.MeshStandardMaterial({ color: 0x8f8c86, roughness: 0.9 }));
+    quay.position.set(this.rect.minX - 103, this.baseY - 3.45, (this.rect.minZ + this.rect.maxZ) / 2);
+    quay.receiveShadow = true;
+    this.scene.add(quay);
+    this.physics.addStaticBox(quay.position.clone().setY(this.baseY - 2.4), new THREE.Vector3(3, 3.5, (this.rect.maxZ - this.rect.minZ + 120) / 2), 0);
+  }
+
+  // --------------------------------------------------------------- Industry
+  _buildIndustry() {
+    const rng = this.rng;
+    const tanks = [], chimneys = [];
+    for (const lot of this.tankLots) {
+      const w = lot.maxX - lot.minX, d = lot.maxZ - lot.minZ;
+      const r = Math.min(w, d) / 4.6;
+      if (r < 3) continue;
+      for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+        if (rng() < 0.2) continue;
+        tanks.push({ x: lot.minX + w * (0.27 + i * 0.46), z: lot.minZ + d * (0.27 + j * 0.46), r: r * (0.8 + rng() * 0.2), h: 8 + rng() * 10 });
+      }
+    }
+    for (const b of this.buildings) {
+      if (b.style === 4 && b.z < this.rect.minZ + 250 && rng() < 0.3) chimneys.push({ x: b.x + b.w * 0.3, z: b.z + b.d * 0.3, h: 35 + rng() * 40, y: b.y });
+    }
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
+    const tankGeo = mergeGeometries([
+      new THREE.CylinderGeometry(1, 1, 1, 24).translate(0, 0.5, 0),
+      new THREE.SphereGeometry(1, 24, 6, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.18, 1).translate(0, 1, 0),
+    ]);
+    const tm = new THREE.InstancedMesh(tankGeo, new THREE.MeshStandardMaterial({ color: 0xdfe2e4, roughness: 0.5, metalness: 0.5 }), tanks.length);
+    tanks.forEach((t, i) => {
+      tm.setMatrixAt(i, m.compose(p.set(t.x, this.baseY + CURB_H, t.z), q, sc.set(t.r, t.h, t.r)));
+      this.physics.addStaticCylinder(p.set(t.x, this.baseY, t.z), t.r, t.h / 2);
+    });
+    // red-and-white chimneys with a stripe texture
+    const c = document.createElement('canvas');
+    c.width = 4; c.height = 64;
+    const ctx = c.getContext('2d');
+    for (let k = 0; k < 8; k++) { ctx.fillStyle = k % 2 ? '#f2f2ee' : '#c8321e'; ctx.fillRect(0, k * 8, 4, 8); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const cm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.75, 1.1, 1, 12, 1, true).translate(0, 0.5, 0),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, side: THREE.DoubleSide }), chimneys.length);
+    chimneys.forEach((ch, i) => cm.setMatrixAt(i, m.compose(p.set(ch.x, ch.y, ch.z), q, sc.set(1.6, ch.h, 1.6))));
+    for (const im of [tm, cm]) { im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); this.scene.add(im); }
+    this.instanceCount += tanks.length + chimneys.length;
+  }
+
+  // ------------------------------------------------------------ Tokyo Tower
+  _buildTokyoTower() {
+    const { x, z } = TOKYO_TOWER;
+    const y0 = this.baseY + CURB_H;
+    const H = 170;
+    const orange = new THREE.MeshStandardMaterial({ color: 0xff5a1f, roughness: 0.5, metalness: 0.3, emissive: 0xff5a1f, emissiveIntensity: 0 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.55, metalness: 0.2, emissive: 0xffffff, emissiveIntensity: 0 });
+    this.towerMats = [orange, white];
+    const half = (t) => 21 * Math.pow(1 - t, 1.6) + 1.2; // half-width of the lattice at height fraction t
+    const og = [], wg = [];
+    const band = (t) => Math.floor(t * 9) % 2 === 1;
+    // four corner legs, built from short straight pieces following the taper
+    const N = 36;
+    for (let k = 0; k < N; k++) {
+      const t0 = k / N, t1 = (k + 1) / N;
+      for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const a = new THREE.Vector3(sx * half(t0), t0 * H, sz * half(t0));
+        const b = new THREE.Vector3(sx * half(t1), t1 * H, sz * half(t1));
+        const len = a.distanceTo(b);
+        const g = new THREE.BoxGeometry(1.1 * (1 - t0 * 0.6), len, 1.1 * (1 - t0 * 0.6));
+        const mid = a.clone().add(b).multiplyScalar(0.5);
+        const dir = b.clone().sub(a).normalize();
+        const qq = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        g.applyQuaternion(qq).translate(mid.x, mid.y, mid.z);
+        (band((t0 + t1) / 2) ? wg : og).push(g);
+      }
+      // horizontal ring + X bracing on each face every other segment
+      if (k % 2 === 0) {
+        const hw = half(t0), y = t0 * H;
+        for (const [ax, az, rot] of [[0, hw, 0], [0, -hw, 0], [hw, 0, Math.PI / 2], [-hw, 0, Math.PI / 2]]) {
+          const g = new THREE.BoxGeometry(hw * 2, 0.45, 0.45).rotateY(rot).translate(ax, y, az);
+          (band(t0) ? wg : og).push(g);
+          const hw1 = half(t0 + 2 / N), y1 = (t0 + 2 / N) * H;
+          for (const s2 of [-1, 1]) {
+            const p0 = rot ? new THREE.Vector3(ax, y, -hw * s2) : new THREE.Vector3(-hw * s2, y, az);
+            const p1 = rot ? new THREE.Vector3(Math.sign(ax) * hw1, y1, hw1 * s2) : new THREE.Vector3(hw1 * s2, y1, Math.sign(az) * hw1);
+            const len = p0.distanceTo(p1);
+            const g2 = new THREE.BoxGeometry(0.3, len, 0.3);
+            g2.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), p1.clone().sub(p0).normalize()));
+            const mid = p0.clone().add(p1).multiplyScalar(0.5);
+            g2.translate(mid.x, mid.y, mid.z);
+            (band(t0) ? wg : og).push(g2);
+          }
+        }
+      }
+    }
+    // an inset solid core in the same bands, so the tower reads as a spire from across the city
+    // (the lattice members alone go sub-pixel beyond a few hundred metres)
+    for (let k = 0; k < 18; k++) {
+      const t0 = 0.12 + (k / 18) * 0.86, t1 = 0.12 + ((k + 1) / 18) * 0.86;
+      const g = new THREE.CylinderGeometry(half(t1) * 0.72 * Math.SQRT2, half(t0) * 0.72 * Math.SQRT2, (t1 - t0) * H, 4, 1)
+        .rotateY(Math.PI / 4).translate(0, ((t0 + t1) / 2) * H, 0);
+      (band((t0 + t1) / 2) ? wg : og).push(g);
+    }
+    // arches between the legs at the base, the two observation decks, antenna
+    for (const rot of [0, Math.PI / 2]) {
+      const arch = new THREE.TorusGeometry(14, 0.8, 6, 20, Math.PI).rotateY(rot).translate(0, 4, 0);
+      for (const off of [-1, 1]) og.push(arch.clone().translate(rot ? off * half(0.08) : 0, 0, rot ? 0 : off * half(0.08)));
+    }
+    const deck1 = new THREE.CylinderGeometry(half(0.44) + 3, half(0.44) + 2, 7, 8).rotateY(Math.PI / 8).translate(0, 0.44 * H + 3.5, 0);
+    const deck2 = new THREE.CylinderGeometry(half(0.72) + 2, half(0.72) + 1.5, 4.5, 8).rotateY(Math.PI / 8).translate(0, 0.72 * H + 2.2, 0);
+    wg.push(deck1, deck2);
+    og.push(new THREE.CylinderGeometry(0.45, 0.9, 42, 8).translate(0, H + 21, 0));
+    wg.push(new THREE.CylinderGeometry(1.2, 1.2, 5, 8).translate(0, H + 8, 0));
+    const glass = new THREE.MeshStandardMaterial({ color: 0x223040, roughness: 0.1, metalness: 0.6, emissive: 0xffd9a0, emissiveIntensity: 0 });
+    this.towerMats.push(glass);
+    const win1 = new THREE.CylinderGeometry(half(0.44) + 3.1, half(0.44) + 3.1, 3, 8, 1, true).rotateY(Math.PI / 8).translate(0, 0.44 * H + 4, 0);
+    const og2 = mergeGeometries(og.map((g) => g.index ? g.toNonIndexed() : g));
+    const wg2 = mergeGeometries(wg.map((g) => g.index ? g.toNonIndexed() : g));
+    const grp = new THREE.Group();
+    grp.add(new THREE.Mesh(og2, orange), new THREE.Mesh(wg2, white), new THREE.Mesh(win1, glass));
+    grp.position.set(x, y0, z);
+    grp.rotation.y = 0.2;
+    grp.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    this.scene.add(grp);
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const lx = sx * half(0.02), lz = sz * half(0.02);
+      const c = Math.cos(0.2), sn = Math.sin(0.2);
+      this.physics.addStaticBox(new THREE.Vector3(x + lx * c + lz * sn, y0 + 6, z - lx * sn + lz * c), new THREE.Vector3(2, 6, 2), 0.2);
+    }
+    this.landmarkTower = grp;
+  }
+
+  // -------------------------------------------------------- Scramble crossing
+  _buildScramble() {
+    const { x, z } = SCRAMBLE;
+    const hs = this.sw / 2;
+    // diagonal zebra bands across the intersection
+    const stripes = [];
+    for (const dir of [1, -1]) {
+      const len = Math.hypot(this.sw, this.sw) - 4;
+      for (let k = -len / 2; k < len / 2; k += 1.6) {
+        const g = new THREE.PlaneGeometry(0.8, 4).rotateX(-Math.PI / 2).translate(k, 0, 0).rotateY(dir * Math.PI / 4);
+        stripes.push(g.translate(x, this.baseY + 0.08, z));
+      }
+    }
+    const zm = new THREE.Mesh(mergeGeometries(stripes), new THREE.MeshStandardMaterial({
+      color: 0xf0f0e8, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    }));
+    zm.receiveShadow = true;
+    this.scene.add(zm);
+    // giant video screens on the corner buildings, facing the crossing
+    const screen = this._screenTexture();
+    this.screenTex = screen;
+    const mat = new THREE.MeshStandardMaterial({ map: screen, emissive: 0xffffff, emissiveMap: screen, emissiveIntensity: 1.3, roughness: 0.3 });
+    this.screenMat = mat;
+    const around = this.buildings.filter((b) => b.y < this.baseY + 1 && Math.abs(b.x - x) < 90 && Math.abs(b.z - z) < 90 && b.h > 16);
+    let made = 0;
+    for (const [qx, qz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const cands = around.filter((b) => Math.sign(b.x - x) === qx && Math.sign(b.z - z) === qz);
+      if (!cands.length) continue;
+      const b = cands.reduce((a, c) => (Math.hypot(a.x - x, a.z - z) < Math.hypot(c.x - x, c.z - z) ? a : c));
+      // the face pointing at the crossing along the longer street view
+      const faceX = Math.abs(b.x - x) > Math.abs(b.z - z);
+      const nx = faceX ? -qx : 0, nz = faceX ? 0 : -qz;
+      const fw = faceX ? b.d : b.w;
+      const w = Math.min(fw * 0.85, 26), h = Math.min(b.h - 8, w * 0.6);
+      const g = new THREE.PlaneGeometry(w, h);
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.position.set(b.x + nx * (b.w / 2 + 0.3), this.baseY + 8 + h / 2, b.z + nz * (b.d / 2 + 0.3));
+      mesh.rotation.y = Math.atan2(nx, nz);
+      // offset each screen's content
+      const uvs = g.attributes.uv;
+      for (let i = 0; i < uvs.count; i++) uvs.setX(i, uvs.getX(i) * 0.25 + made * 0.25);
+      this.scene.add(mesh);
+      made++;
+    }
+  }
+
+  /** A strip of four bright "adverts"; scrolled over time to fake video. */
+  _screenTexture() {
+    const c = document.createElement('canvas');
+    c.width = 1024; c.height = 256;
+    const ctx = c.getContext('2d');
+    const ads = [
+      ['#ff2d8f', '#2de2ff', 'HORIZON', 'JAPAN'], ['#ffd23f', '#1b1d22', 'DRIFT', 'KINGS'],
+      ['#2de2ff', '#ff2d8f', 'RAMEN', '24H'], ['#b6ff3b', '#1b1d22', 'SAKURA', 'FEST'],
+    ];
+    ads.forEach(([bg, fg, a, b], i) => {
+      const x = i * 256;
+      const g = ctx.createLinearGradient(x, 0, x + 256, 256);
+      g.addColorStop(0, bg); g.addColorStop(1, '#101018');
+      ctx.fillStyle = g; ctx.fillRect(x, 0, 256, 256);
+      ctx.fillStyle = fg;
+      for (let k = 0; k < 6; k++) { ctx.globalAlpha = 0.25; ctx.beginPath(); ctx.arc(x + 40 + k * 40, 200 - k * 18, 30 + k * 6, 0, Math.PI * 2); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'italic 800 64px "Barlow Condensed", "Arial Narrow", sans-serif';
+      ctx.fillText(a, x + 128, 110, 230);
+      ctx.font = '800 40px "Barlow Condensed", "Arial Narrow", sans-serif';
+      ctx.fillText(b, x + 128, 165, 230);
+    });
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
+    return t;
+  }
+
+  /** Animate the video screens. */
+  update(dt) {
+    if (!this.screenTex) return;
+    this._st = (this._st || 0) + dt;
+    // hold each advert for a few seconds, then slide to the next
+    const k = this._st / 4;
+    const f = k - Math.floor(k);
+    this.screenTex.offset.x = (Math.floor(k) + Math.min(1, f * 6) ) * 0.25;
+    this.screenMat.emissiveIntensity = (1.1 + 0.2 * Math.sin(this._st * 7)) * (0.7 + (this._night || 0) * 1.2);
   }
 
   /** Night factor 0..1 drives windows, signs and lamps. */
   setNight(n) {
     this.uniforms.uNight.value = n;
+    this._night = n;
     if (this.lampMaterial) this.lampMaterial.emissiveIntensity = 0.3 + n * 4;
+    if (this.towerMats) {
+      // Tokyo Tower lights up orange at night
+      this.towerMats[0].emissiveIntensity = n * 0.9;
+      this.towerMats[1].emissiveIntensity = n * 0.35;
+      this.towerMats[2].emissiveIntensity = n * 1.5;
+    }
   }
 
   contains(x, z, margin = 0) {

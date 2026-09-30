@@ -18,55 +18,71 @@ export const EVENTS = [
     desc: 'Festival Loop · 3 laps', payout: [30000, 18000, 12000, 7000, 4500, 3000], xp: [3000, 2200, 1700, 1300, 1000, 800],
   },
   {
-    id: 'neon-city', type: 'race', route: 'city', name: 'Neon City Street Race', laps: 2, ai: 5,
-    desc: 'Downtown streets · 2 laps', payout: [40000, 24000, 15000, 9000, 6000, 4000], xp: [3600, 2600, 2000, 1500, 1100, 900],
+    id: 'c1-loop', type: 'race', route: 'c1', name: 'C1 Loop', laps: 3, ai: 5, kind: 'EXPRESSWAY RACE',
+    desc: 'Elevated loop over Tokyo · 3 laps', payout: [55000, 33000, 20000, 12000, 7500, 5000], xp: [4800, 3500, 2600, 1900, 1400, 1000],
   },
   {
-    id: 'fuji-pass', type: 'race', route: 'mountain', name: 'Fuji Pass', laps: 2, ai: 5,
-    desc: 'Mountain road · 2 laps', payout: [45000, 27000, 17000, 10000, 6500, 4500], xp: [4000, 2900, 2200, 1600, 1200, 900],
+    id: 'neon-city', type: 'race', route: 'city', name: 'Tokyo Downtown Race', laps: 2, ai: 5, kind: 'STREET RACE',
+    desc: 'Shibuya, Ginkgo Avenue, the docks · 2 laps', payout: [40000, 24000, 15000, 9000, 6000, 4000], xp: [3600, 2600, 2000, 1500, 1100, 900],
   },
   {
-    id: 'horizon-highway', type: 'race', route: 'highway', name: 'Horizon Highway', laps: 1, ai: 5,
-    desc: '10 km flat-out loop', payout: [60000, 36000, 22000, 13000, 8000, 5000], xp: [5000, 3600, 2700, 2000, 1500, 1100],
+    id: 'fuji-pass', type: 'race', route: 'mountain', name: 'Ohtani Pass', laps: 2, ai: 5, kind: 'MOUNTAIN RACE',
+    desc: 'Hill road above the festival · 2 laps', payout: [45000, 27000, 17000, 10000, 6500, 4500], xp: [4000, 2900, 2200, 1600, 1200, 900],
+  },
+  {
+    id: 'horizon-highway', type: 'race', route: 'highway', name: 'Horizon Expressway', laps: 1, ai: 5, kind: 'HIGHWAY RACE',
+    desc: '13 km loop through every region', payout: [60000, 36000, 22000, 13000, 8000, 5000], xp: [5000, 3600, 2700, 2000, 1500, 1100],
   },
   {
     id: 'festival-sprint', type: 'race', route: 'festival', name: 'Festival Sprint', laps: 1, ai: 5,
     desc: 'Festival Loop · 1 lap', payout: [12000, 8000, 6000, 4000, 2500, 1500], xp: [1500, 1100, 900, 700, 500, 400],
   },
   {
+    id: 'legend-island', type: 'race', route: 'island', name: 'Legend Island Circuit', laps: 3, ai: 5, kind: 'ROAD RACE',
+    desc: 'Around the island · 3 laps', payout: [50000, 30000, 19000, 11000, 7000, 4800], xp: [4500, 3300, 2500, 1800, 1300, 1000],
+  },
+  {
+    id: 'coastal-circuit', type: 'race', route: 'coast', name: 'Ito Coast Sprint', laps: 1, ai: 5, kind: 'SPRINT',
+    desc: 'Tokyo to Nangan along the cliffs · 6 km', payout: [70000, 42000, 26000, 15000, 9000, 6000], xp: [6000, 4300, 3200, 2400, 1800, 1300],
+  },
+  {
+    id: 'lakeside-loop', type: 'race', route: 'lake', name: 'Lake Haruna Loop', laps: 2, ai: 5, kind: 'ROAD RACE',
+    desc: 'Crater lake in Shimanoyama · 2 laps', payout: [38000, 23000, 14000, 8500, 5500, 3800], xp: [3400, 2500, 1900, 1400, 1100, 800],
+  },
+  {
+    id: 'haruna-touge', type: 'race', route: 'touge', name: 'Haruna Touge', laps: 1, ai: 5, kind: 'SPRINT',
+    desc: 'Uphill hairpins to the lake', payout: [42000, 25000, 16000, 9500, 6000, 4200], xp: [3900, 2800, 2100, 1600, 1200, 900],
+  },
+  {
+    id: 'summit-sprint', type: 'race', route: 'summit', name: 'Sotoyama Skyline', laps: 1, ai: 5, kind: 'SPRINT',
+    desc: 'Hill climb to the ski resort', payout: [50000, 30000, 19000, 11000, 7000, 4800], xp: [4500, 3300, 2500, 1800, 1300, 1000],
+  },
+  {
+    id: 'kiso-rally', type: 'race', route: 'rally', name: 'Nangan Forest Rally', laps: 2, ai: 5, kind: 'DIRT RACE',
+    desc: 'Gravel trail through the pines · 2 laps', payout: [48000, 29000, 18000, 10500, 6800, 4600], xp: [4300, 3100, 2400, 1700, 1300, 950],
+  },
+  {
+    id: 'minato-streets', type: 'race', route: 'ito', name: 'Ito Harbour GP', laps: 3, ai: 5, kind: 'STREET RACE',
+    desc: 'Tight harbour streets · 3 laps', payout: [36000, 22000, 13500, 8000, 5200, 3600], xp: [3300, 2400, 1800, 1300, 1000, 750],
+  },
+  {
+    id: 'airfield-drag', type: 'race', route: 'docks', name: 'Dockyard Drag', laps: 1, ai: 3, kind: 'DRAG RACE',
+    desc: 'Flat out along the Tokyo quay · 1.3 km', payout: [15000, 9000, 6000, 3500], xp: [1500, 1100, 800, 600],
+  },
+  {
     id: 'time-trial', type: 'trial', route: 'festival', name: 'Hanami Time Trial', laps: 2, ai: 0,
     desc: 'Best lap counts', stars: [62, 52, 46], payout: [4000, 9000, 16000], xp: [800, 1500, 2500],
   },
   {
-    id: 'city-attack', type: 'trial', route: 'city', name: 'Neon Time Attack', laps: 2, ai: 0,
+    id: 'city-attack', type: 'trial', route: 'city', name: 'Tokyo Time Attack', laps: 2, ai: 0,
     desc: 'Best lap counts', stars: [150, 130, 118], payout: [5000, 11000, 20000], xp: [900, 1700, 2800],
   },
   {
-    id: 'coastal-circuit', type: 'race', route: 'coast', name: 'Coastal Circuit', laps: 1, ai: 5, kind: 'ROAD RACE',
-    desc: 'Cliffs, beaches & paddy fields · 12 km', payout: [70000, 42000, 26000, 15000, 9000, 6000], xp: [6000, 4300, 3200, 2400, 1800, 1300],
+    id: 'c1-trial', type: 'trial', route: 'c1', name: 'C1 Time Attack', laps: 2, ai: 0,
+    desc: 'Best lap counts', stars: [120, 104, 96], payout: [5000, 11000, 20000], xp: [900, 1700, 2800],
   },
   {
-    id: 'lakeside-loop', type: 'race', route: 'lake', name: 'Lakeside Loop', laps: 2, ai: 5, kind: 'ROAD RACE',
-    desc: 'Over Sakura Bridge · 2 laps', payout: [38000, 23000, 14000, 8500, 5500, 3800], xp: [3400, 2500, 1900, 1400, 1100, 800],
-  },
-  {
-    id: 'summit-sprint', type: 'race', route: 'summit', name: 'Summit Hill Climb', laps: 1, ai: 5, kind: 'SPRINT',
-    desc: 'Hairpins up to the snow line', payout: [50000, 30000, 19000, 11000, 7000, 4800], xp: [4500, 3300, 2500, 1800, 1300, 1000],
-  },
-  {
-    id: 'kiso-rally', type: 'race', route: 'rally', name: 'Kiso Forest Rally', laps: 2, ai: 5, kind: 'DIRT RACE',
-    desc: 'Gravel trail through the pines · 2 laps', payout: [48000, 29000, 18000, 10500, 6800, 4600], xp: [4300, 3100, 2400, 1700, 1300, 950],
-  },
-  {
-    id: 'minato-streets', type: 'race', route: 'minato', name: 'Minato Harbour GP', laps: 3, ai: 5, kind: 'STREET RACE',
-    desc: 'Tight harbour streets · 3 laps', payout: [36000, 22000, 13500, 8000, 5200, 3600], xp: [3300, 2400, 1800, 1300, 1000, 750],
-  },
-  {
-    id: 'airfield-drag', type: 'race', route: 'airfield', name: 'Airfield Drag', laps: 1, ai: 3, kind: 'DRAG RACE',
-    desc: 'Flat out down the runway · 1 km', payout: [15000, 9000, 6000, 3500], xp: [1500, 1100, 800, 600],
-  },
-  {
-    id: 'lake-trial', type: 'trial', route: 'lake', name: 'Sakura Bridge Time Trial', laps: 2, ai: 0,
+    id: 'lake-trial', type: 'trial', route: 'lake', name: 'Haruna Lake Time Trial', laps: 2, ai: 0,
     desc: 'Best lap counts', stars: [150, 128, 116], payout: [5000, 11000, 20000], xp: [900, 1700, 2800],
   },
 ];
@@ -87,7 +103,7 @@ const _t = new THREE.Vector3();
 
 export const EVENT_KIND_LABEL = (ev) => ev.kind ?? (ev.type === 'trial' ? 'TIME TRIAL'
   : ev.route === 'city' ? 'STREET RACE' : ev.route === 'highway' ? 'HIGHWAY RACE' : ev.route === 'mountain' ? 'MOUNTAIN RACE' : 'ROAD RACE');
-export const EVENT_COLOR = (ev) => (ev.type === 'trial' ? '#2de2ff' : ev.kind === 'SPRINT' ? '#ffd23f' : ev.kind === 'DRAG RACE' ? '#ff8a2d' : ev.kind === 'DIRT RACE' ? '#b6ff3b' : '#ff2d8f');
+export const EVENT_COLOR = (ev) => (ev.type === 'trial' ? '#2de2ff' : ev.kind === 'SPRINT' ? '#ffd23f' : ev.kind === 'DRAG RACE' ? '#ff8a2d' : ev.kind === 'DIRT RACE' ? '#b6ff3b' : ev.kind === 'EXPRESSWAY RACE' ? '#8b5cff' : '#ff2d8f');
 
 // ============================================================================
 // Event beacons: light columns at every event start you can drive into
@@ -104,11 +120,19 @@ export class EventBeacons {
       const k = byRoute.get(r) || 0;
       byRoute.set(r, k + 1);
       // alongside the road just before the start line, spaced out if several share a route
-      const i = r._wrap(Math.round(r.startIndex - (18 + k * 16) / r.spacing));
-      const side = r.flat && r.render === false ? 0.5 : 1;
-      const p = r.point(i, -(r.width / 2 + 5) * side, new THREE.Vector3());
-      p.y = r.flat ? (r.flatY ?? 0) : env.heightAt(p.x, p.z);
-      if (r.bridge && r.bridge[i]) p.y = r.ys[i];
+      let p;
+      if (r.elevated) {
+        // expressway events start from beside the deck, up on the viaduct
+        const i = r._wrap(Math.round(r.startIndex - (18 + k * 16) / r.spacing));
+        p = r.point(i, 0, new THREE.Vector3());
+        p.y = r.ys[i];
+      } else {
+        const i = r._wrap(Math.round(r.startIndex - (18 + k * 16) / r.spacing));
+        const side = r.flat && r.render === false ? 0.5 : 1;
+        p = r.point(i, -(r.width / 2 + 5) * side, new THREE.Vector3());
+        p.y = r.flat ? (r.flatY ?? 0) : env.heightAt(p.x, p.z);
+        if (r.bridge && r.bridge[i]) p.y = r.ys[i];
+      }
       this.list.push({ ev, pos: p, color: EVENT_COLOR(ev) });
     }
     this._build();
@@ -661,13 +685,14 @@ export class StuntManager {
 // Free-roam traffic
 // ============================================================================
 const TRAFFIC_PLAN = [
-  { route: 'highway', count: 3, skill: 0.8, lane: 4.4, cap: 36 },
-  { route: 'city', count: 2, skill: 0.62, lane: 3.2, cap: 17 },
+  { route: 'highway', count: 4, skill: 0.8, lane: 4.4, cap: 36 },
+  { route: 'c1', count: 3, skill: 0.78, lane: 3.8, cap: 30 },
+  { route: 'city', count: 3, skill: 0.62, lane: 3.2, cap: 17 },
   { route: 'festival', count: 1, skill: 0.72, lane: 3, cap: 26 },
   { route: 'mountain', count: 1, skill: 0.7, lane: 2.3, cap: 24 },
-  { route: 'coast', count: 3, skill: 0.75, lane: 2.9, cap: 30 },
   { route: 'lake', count: 1, skill: 0.7, lane: 2.7, cap: 24 },
-  { route: 'minato', count: 2, skill: 0.6, lane: 3, cap: 14 },
+  { route: 'ito', count: 2, skill: 0.6, lane: 3, cap: 14 },
+  { route: 'island', count: 1, skill: 0.7, lane: 3, cap: 24 },
 ];
 
 export class AmbientTraffic {

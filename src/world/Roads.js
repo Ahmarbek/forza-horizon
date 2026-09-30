@@ -13,6 +13,7 @@ import { ChunkedInstances } from './Instancing.js';
  */
 
 const SPACING = 3; // metres between samples
+const SEA_BED = -30;
 
 export class Route {
   /**
@@ -176,97 +177,149 @@ export const FESTIVAL_POINTS = [
   [60, -300], [-10, -260],
 ];
 
-export const CITY_RECT = { minX: -1500, maxX: -500, minZ: 500, maxZ: 1500 };
+/** Tokyo City: street grid on the east coast (125 m blocks, 18 m streets). */
+export const CITY_RECT = { minX: -2700, maxX: -1325, minZ: -1300, maxZ: 200 };
 export const CITY_STREET_STEP = 125;
 export const CITY_STREET_WIDTH = 18;
-export const MINATO_RECT = { minX: 1950, maxX: 2450, minZ: -700, maxZ: -100 };
-export const MINATO_STEP = 100;
-export const MINATO_STREET_WIDTH = 14;
-export const MINATO_Y = 2;
-export const AIRFIELD = { minX: -3060, maxX: -1640, minZ: 2640, maxZ: 2760 };
+/** Ito: fishing town on the south-east coast. */
+export const ITO_RECT = { minX: -2650, maxX: -2250, minZ: -2450, maxZ: -2050 };
+export const ITO_STEP = 100;
+export const ITO_STREET_WIDTH = 14;
+export const ITO_Y = 2;
+/** Deck height of the elevated expressways (C1 loop, links, bay bridge). */
+export const DECK_Y = 13;
+
+const smooth01 = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
+/** Ground height where an open route ends: a claimed junction's level, else the terrain. */
+const groundAt = (t, x, z) => { const f = t._flat(x, z); return f.w > 0.9 ? f.y : t.baseHeight(x, z); };
 
 export function createRoutes() {
   const routes = {
     festival: new Route({ id: 'festival', name: 'Festival Loop', points: FESTIVAL_POINTS, width: 14, type: 'circuit', rails: 'curves', lamps: 'pole' }),
     highway: new Route({
-      id: 'highway', name: 'Horizon Highway', width: 20, type: 'highway', rails: 'both', lamps: 'pole',
+      id: 'highway', name: 'Horizon Expressway', width: 20, type: 'highway', rails: 'both', lamps: 'pole',
       points: [
-        [800, -700], [880, 0], [820, 700], [560, 1250], [100, 1650], [-500, 1730], [-1100, 1710],
-        [-1590, 1470], [-1720, 900], [-1700, 300], [-1600, -300], [-1350, -900], [-900, -1350],
-        [-300, -1560], [300, -1500], [650, -1150],
+        [-1080, -1500], [-1070, -700], [-1080, 100], [-1150, 650], [-1100, 1300], [-500, 1480], [300, 1500],
+        [1050, 1350], [1450, 750], [2350, 350], [2300, -300], [2250, -1150], [2150, -2050], [1300, -2350],
+        [200, -2250], [-700, -2000],
       ],
     }),
     mountain: new Route({
-      id: 'mountain', name: 'Fuji Pass', width: 11, type: 'country', rails: 'curves',
+      id: 'mountain', name: 'Ohtani Pass', width: 11, type: 'country', rails: 'curves',
       points: [
-        [-460, -260], [-400, -480], [-520, -700], [-480, -900], [-700, -1020], [-930, -960],
-        [-1100, -800], [-1020, -600], [-1150, -420], [-980, -260], [-760, -330], [-640, -200],
+        [-150, 280], [-40, 480], [-120, 650], [20, 820], [-160, 1000], [-420, 1060], [-560, 900], [-760, 960],
+        [-840, 760], [-700, 560], [-820, 400], [-600, 300], [-380, 380],
       ],
     }),
     city: new Route({
-      id: 'city', name: 'Neon City Circuit', width: CITY_STREET_WIDTH, type: 'street', render: false, carves: false, flat: true,
+      id: 'city', name: 'Tokyo Street Circuit', width: CITY_STREET_WIDTH, type: 'street', render: false, carves: false, flat: true,
       rounded: 13,
-      points: [[-1375, 625], [-625, 625], [-625, 1000], [-875, 1000], [-875, 1375], [-1375, 1375]],
+      points: [[-1575, -1175], [-1575, -300], [-1950, -300], [-1950, 50], [-2450, 50], [-2450, -800], [-2075, -800], [-2075, -1175]],
     }),
-    coast: new Route({
-      id: 'coast', name: 'Coastal Road', width: 13, type: 'country', rails: 'seaward', lamps: 'pole', lampSpacing: 90,
+    // C1-style inner loop: elevated over the block mid-lines of downtown Tokyo
+    c1: new Route({
+      id: 'c1', name: 'C1 Loop', width: 16, type: 'highway', rails: 'none', lamps: 'deck', elevated: true, carves: false,
+      railStyle: 'concrete', rounded: 60, bridgeMin: 0.8, profile: () => DECK_Y,
       points: [
-        [2400, 2300], [2520, 1800], [2560, 1300], [2580, 800], [2560, 300], [2545, -150], [2560, -800],
-        [2500, -1400], [2420, -2000], [2300, -2500], [2100, -2900], [1800, -3100], [1400, -3000],
-        [1250, -2600], [1200, -2000], [1260, -1450], [1480, -900], [1600, -350], [1500, 300], [1450, 900],
-        [1500, 1500], [1700, 2000], [2000, 2350],
+        [-1512.5, -1112.5], [-2137.5, -1112.5], [-2387.5, -862.5], [-2387.5, -362.5], [-2137.5, -112.5],
+        [-1762.5, -112.5], [-1512.5, -362.5],
+      ],
+    }),
+    // Ito coast road: Tokyo → Ito harbour → the southern coves → Nangan
+    coast: new Route({
+      id: 'coast', name: 'Ito Coast Road', width: 12, type: 'country', closed: false, rails: 'seaward', lamps: 'pole', lampSpacing: 90,
+      points: [
+        [-2325, -1300], [-2400, -1550], [-2480, -1800], [-2450, -2050], [-2450, -2450], [-2400, -2700], [-2250, -2950],
+        [-2150, -3200], [-1850, -3300], [-1450, -3120], [-1050, -2850], [-700, -2500], [-470, -2068],
       ],
     }),
     lake: new Route({
-      id: 'lake', name: 'Lakeside Loop', width: 12, type: 'country', rails: 'curves', lamps: 'lantern',
+      id: 'lake', name: 'Shimanoyama Lake Loop', width: 12, type: 'country', rails: 'curves', lamps: 'lantern',
       points: [
-        [200, 2100], [205, 2350], [212, 2750], [222, 3200], [270, 3370], [0, 3400], [-330, 3230],
-        [-480, 2820], [-400, 2370], [-160, 2110],
+        [1990, 1235], [2350, 1300], [2470, 1560], [2430, 1900], [2200, 2090], [1850, 2080], [1640, 1830], [1640, 1500], [1760, 1300],
       ],
     }),
+    touge: new Route({
+      id: 'touge', name: 'Haruna Touge', width: 10, type: 'country', closed: false, rails: 'curves', maxGrade: 0.12, smooth: 45,
+      points: [[1450, 760], [1600, 900], [1500, 1030], [1720, 1100], [1640, 1230], [1850, 1250], [1990, 1235]],
+    }),
     summit: new Route({
-      id: 'summit', name: 'Summit Road', width: 10, type: 'country', closed: false, rails: 'curves', maxGrade: 0.12,
+      id: 'summit', name: 'Sotoyama Skyline', width: 10, type: 'country', closed: false, rails: 'curves', maxGrade: 0.12, smooth: 45,
       points: [
-        [-650, -1600], [-800, -1850], [-1000, -2000], [-1250, -1950], [-1450, -2100], [-1300, -2300],
-        [-1050, -2400], [-1170, -2560], [-1450, -2540], [-1750, -2450], [-1990, -2660], [-2090, -2950],
-        [-1950, -3200], [-1800, -3330], [-1640, -3390],
+        [-300, 2280], [-120, 2420], [-420, 2520], [-120, 2620], [-440, 2720], [-150, 2800], [-450, 2880], [-250, 2960],
+        [-560, 3020], [-760, 3060],
       ],
     }),
     rally: new Route({
-      id: 'rally', name: 'Kiso Forest Trail', width: 8.5, type: 'dirt', rails: 'none', smooth: 45, maxGrade: 0.13,
+      id: 'rally', name: 'Nangan Forest Trail', width: 8.5, type: 'dirt', rails: 'none', smooth: 45, maxGrade: 0.13,
       points: [
-        [-2250, 500], [-2400, 900], [-2650, 1150], [-2950, 1250], [-3200, 1050], [-3300, 700], [-3150, 350],
-        [-3250, 0], [-3100, -400], [-2800, -600], [-2550, -450], [-2600, -150], [-2400, 50], [-2300, 250],
+        [100, -2550], [500, -2450], [900, -2600], [1300, -2750], [1500, -3050], [1200, -3300], [700, -3250], [300, -3100],
+        [0, -2900], [-100, -2700],
       ],
     }),
-    minato: new Route({
-      id: 'minato', name: 'Minato Harbour Circuit', width: MINATO_STREET_WIDTH, type: 'street', render: false, carves: false,
-      flat: true, flatY: MINATO_Y, rounded: 10,
-      points: [[1950, -700], [2450, -700], [2450, -100], [2250, -100], [2250, -400], [2050, -400], [2050, -100], [1950, -100]],
+    ito: new Route({
+      id: 'ito', name: 'Ito Harbour Circuit', width: ITO_STREET_WIDTH, type: 'street', render: false, carves: false,
+      flat: true, flatY: ITO_Y, rounded: 10,
+      points: [[-2650, -2450], [-2250, -2450], [-2250, -2050], [-2450, -2050], [-2450, -2250], [-2550, -2250], [-2550, -2050], [-2650, -2050]],
     }),
-    airfield: new Route({
-      id: 'airfield', name: 'Airfield Strip', width: 40, type: 'runway', closed: false, rails: 'none', lamps: 'none',
-      points: [[-1680, 2700], [-2300, 2700], [-3020, 2700]],
+    island: new Route({
+      id: 'island', name: 'Legend Island Circuit', width: 13, type: 'circuit', rails: 'curves', lamps: 'pole',
+      points: [
+        [-3340, -490], [-3400, -330], [-3530, -250], [-3700, -290], [-3790, -430], [-3770, -600], [-3650, -720],
+        [-3480, -730], [-3370, -640],
+      ],
+    }),
+    docks: new Route({
+      id: 'docks', name: 'Tokyo Dock Strip', width: 18, type: 'highway', closed: false, rails: 'none', lamps: 'pole', lampSpacing: 60,
+      flat: true, flatY: 0,
+      points: [[-2752, -1260], [-2752, -500], [-2752, 160]],
     }),
   };
   const connectors = [
-    new Route({ id: 'c-fest-east', closed: false, width: 11, type: 'country', points: [[440, -120], [620, -160], [880, -250]] }),
-    new Route({ id: 'c-city-fest', closed: false, width: 11, type: 'country', points: [[-1000, 500], [-900, 400], [-620, 330], [-360, 300], [-120, 230], [30, 170]] }),
-    new Route({ id: 'c-mtn-fest', closed: false, width: 11, type: 'country', points: [[-460, -260], [-320, -340], [-150, -378], [0, -348], [60, -300]] }),
-    new Route({ id: 'c-city-north', closed: false, width: 11, type: 'country', points: [[-750, 1500], [-720, 1610], [-640, 1725]] }),
-    new Route({ id: 'c-city-east', closed: false, width: 11, type: 'country', points: [[-500, 1000], [-200, 1050], [150, 1160], [470, 1330]] }),
-    new Route({ id: 'c-mtn-south', closed: false, width: 11, type: 'country', points: [[-700, -1020], [-760, -1180], [-860, -1390]] }),
-    new Route({ id: 'c-fest-south', closed: false, width: 11, type: 'country', points: [[370, -340], [420, -620], [560, -900], [690, -1100]] }),
-    new Route({ id: 'c-hwy-minato', name: 'Harbour Road', closed: false, width: 11, type: 'country', points: [[880, 0], [1150, -60], [1450, -150], [1750, -300], [1950, -300]] }),
-    new Route({ id: 'c-minato-coast', closed: false, width: 11, type: 'country', points: [[2450, -400], [2500, -405], [2556, -410]] }),
-    new Route({ id: 'c-hwy-farm', name: 'Farm Road', closed: false, width: 10, type: 'country', points: [[650, -1150], [850, -1500], [1050, -1900], [1203, -2200]] }),
-    new Route({ id: 'c-village-ew', name: 'Village Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[1218, -2420], [1500, -2460], [1800, -2400], [2100, -2450], [2345, -2400]] }),
-    new Route({ id: 'c-village-ns', name: 'Paddy Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[1650, -1980], [1660, -2400], [1640, -2900], [1600, -3060]] }),
-    new Route({ id: 'c-hwy-lake', closed: false, width: 11, type: 'country', points: [[100, 1650], [130, 1880], [200, 2100]] }),
-    new Route({ id: 'c-lake-coast', name: 'Wind Farm Road', closed: false, width: 11, type: 'country', points: [[270, 3370], [700, 3280], [1200, 3000], [1700, 2600], [2000, 2350]] }),
-    new Route({ id: 'c-hwy-summit', closed: false, width: 10, type: 'country', points: [[-900, -1350], [-780, -1480], [-650, -1600]] }),
-    new Route({ id: 'c-hwy-rally', name: 'Kiso Road', closed: false, width: 9, type: 'country', points: [[-1715, 600], [-1950, 580], [-2250, 500]] }),
-    new Route({ id: 'c-hwy-airfield', name: 'Airfield Road', closed: false, width: 11, type: 'country', points: [[-1100, 1710], [-1300, 2000], [-1500, 2350], [-1640, 2620], [-1680, 2700]] }),
+    // festival hub
+    new Route({ id: 'c-fest-tokyo', name: 'Ohtani East Road', closed: false, width: 11, type: 'country', points: [[-10, -260], [-300, -350], [-700, -420], [-1073, -460]] }),
+    new Route({ id: 'c-fest-mtn', closed: false, width: 11, type: 'country', points: [[30, 170], [-80, 230], [-150, 280]] }),
+    new Route({ id: 'c-fest-minamino', name: 'Minamino Farm Road', closed: false, width: 9, type: 'country', points: [[440, -120], [800, -300], [1300, -500], [1800, -800], [2263, -900]] }),
+    new Route({ id: 'c-fest-nangan', name: 'Nangan Road', closed: false, width: 10, type: 'country', points: [[370, -340], [420, -800], [400, -1500], [300, -2259]] }),
+    // Tokyo access (ground streets meet the city at its west edge)
+    new Route({ id: 'c-hwy-tokyo-n', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1076, -300], [-1200, -300], [-1325, -300]] }),
+    new Route({ id: 'c-hwy-tokyo-s', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1072, -1175], [-1200, -1175], [-1325, -1175]] }),
+    new Route({ id: 'c-hwy-tokyo-w', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1080, 50], [-1200, 50], [-1325, 50]] }),
+    // expressway link: C1 west side → down to the Horizon Expressway
+    new Route({
+      id: 'c-c1-link', name: 'Shuto Link', closed: false, width: 14, type: 'highway', elevated: true, startElevated: true,
+      railStyle: 'concrete', lamps: 'deck', bridgeMin: 0.8,
+      points: [[-1512.5, -737.5], [-1400, -737.5], [-1325, -737.5], [-1200, -739], [-1071, -737]],
+      profile(s, x, z, t, r) {
+        const flat = 190;
+        if (s <= flat) return DECK_Y;
+        const end = groundAt(t, r.xs[r.count - 1], r.zs[r.count - 1]);
+        return DECK_Y + (end - DECK_Y) * smooth01((s - flat) / (r.length - flat));
+      },
+    }),
+    // Tokyo Bay Bridge: C1 east side → over the docks and the sea → Legend Island
+    new Route({
+      id: 'c-bay-bridge', name: 'Tokyo Bay Bridge', closed: false, width: 16, type: 'highway', elevated: true, startElevated: true,
+      railStyle: 'concrete', lamps: 'deck', bridgeMin: 0.8, suspension: true,
+      points: [[-2387.5, -487.5], [-2600, -487.5], [-2800, -488], [-3000, -489], [-3200, -490], [-3340, -490]],
+      profile(s, x, z, t, r) {
+        const ramp = 170;
+        const s0 = r.length - ramp;
+        if (s <= s0) return DECK_Y;
+        const end = groundAt(t, r.xs[r.count - 1], r.zs[r.count - 1]);
+        return DECK_Y + (end - DECK_Y) * smooth01((s - s0) / ramp);
+      },
+    }),
+    // north: Tokyo → the Wangan coast → Hokubu
+    new Route({ id: 'c-wangan', name: 'Wangan Coast Road', closed: false, width: 12, type: 'country', rails: 'seaward', lamps: 'pole', lampSpacing: 80, points: [[-2325, 200], [-2450, 500], [-2560, 900], [-2520, 1300], [-2300, 1700], [-1900, 1950], [-1300, 1900]] }),
+    new Route({ id: 'c-hokubu-ew', name: 'Hokubu Farm Road', closed: false, width: 9, type: 'country', points: [[-1300, 1900], [-600, 1850], [0, 1800], [600, 1820], [1050, 1800]] }),
+    new Route({ id: 'c-ohtani-north', name: 'Hokubu Valley Road', closed: false, width: 10, type: 'country', points: [[-420, 1060], [-380, 1300], [-330, 1600], [-300, 1850], [-300, 2280]] }),
+    new Route({ id: 'c-mtn-hwy', closed: false, width: 11, type: 'country', points: [[-840, 760], [-1000, 720], [-1146, 700]] }),
+    new Route({ id: 'c-hokubu-lake', name: 'Shimanoyama Climb', closed: false, width: 10, type: 'country', rails: 'curves', maxGrade: 0.13, smooth: 45, points: [[1050, 1800], [1250, 1950], [1350, 1780], [1500, 1900], [1640, 1720]] }),
+    // south
+    new Route({ id: 'c-hwy-rally', name: 'Nangan Forest Road', closed: false, width: 9, type: 'country', points: [[200, -2250], [150, -2400], [100, -2550]] }),
+    new Route({ id: 'c-minamino-ns', name: 'Paddy Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[1500, -440], [1550, -1000], [1450, -1500], [1300, -1900], [1300, -2350]] }),
+    new Route({ id: 'c-minamino-west', name: 'Minamino Village Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[800, -300], [900, -800], [1100, -1250], [1450, -1500]] }),
   ];
   return { routes, connectors };
 }
@@ -327,7 +380,7 @@ export class RoadNetwork {
     this.connectors = connectors;
     this.all = [...Object.values(routes), ...connectors];
     this.instanceCount = 0;
-    this.crossings = findCrossings(this.all.filter((r) => r.render));
+    this.crossings = findCrossings(this.all.filter((r) => r.render && !r.elevated));
   }
 
   /** Junction points: connector ends, open-route ends and at-grade crossings (levelled, no rails). */
@@ -335,7 +388,9 @@ export class RoadNetwork {
     const pts = [];
     for (const r of this.all) {
       if (r.closed || !r.render) continue;
-      pts.push([r.xs[0], r.zs[0]], [r.xs[r.count - 1], r.zs[r.count - 1]]);
+      // an expressway link starting on a deck joins it up in the air: no ground junction there
+      if (!r.startElevated) pts.push([r.xs[0], r.zs[0]]);
+      pts.push([r.xs[r.count - 1], r.zs[r.count - 1]]);
     }
     for (const c of this.crossings) pts.push(c);
     return pts;
@@ -382,8 +437,8 @@ export class RoadNetwork {
 
     this._junctions = this.junctions();
     this._buildGuardRails();
-    this._buildLights();
     this._buildBridges();
+    this._buildLights();
   }
 
   _nearJunction(x, z, r = 45) {
@@ -413,9 +468,9 @@ export class RoadNetwork {
           if (mode === 'curves' && side !== outer) continue;
           const off = side * (r.width / 2 + offsetExtra);
           const x = r.xs[i] + r.tz[i] * off, z = r.zs[i] - r.tx[i] * off;
-          // seaward: only on the side facing the ocean (+x), and only above a drop
+          // seaward: only on the side facing the ocean (-x, east), and only above a drop
           if (mode === 'seaward') {
-            if (r.tz[i] * side <= 0) continue;
+            if (r.tz[i] * side >= 0) continue;
             if (this.terrain.heightAt(x + 12 * Math.sign(r.tz[i] * side), z) > r.ys[i] - 3) continue;
           }
           if (this._nearJunction(x, z)) continue;
@@ -452,6 +507,20 @@ export class RoadNetwork {
       if (x < bx.minX - pad || x > bx.maxX + pad || z < bx.minZ - pad || z > bx.maxZ + pad) continue;
       r.nearestIndex(x, z);
       if (r.lastDistanceSq < pad * pad) return true;
+    }
+    return false;
+  }
+
+  /** true if another bridge deck lies at x,z at about height y (where expressways merge). */
+  _otherDeckAt(x, z, y, self, margin = 1.5) {
+    for (const { r, a, b } of this.bridgeSpans || []) {
+      if (r === self) continue;
+      const bb = r._bbox || (r._bbox = routeBBox(r));
+      const pad = r.width / 2 + margin;
+      if (x < bb.minX - pad || x > bb.maxX + pad || z < bb.minZ - pad || z > bb.maxZ + pad) continue;
+      const i = r.nearestIndex(x, z);
+      if (i < a || i > b) continue;
+      if (r.lastDistanceSq < pad * pad && Math.abs(r.ys[i] - y) < 2.5) return true;
     }
     return false;
   }
@@ -495,6 +564,18 @@ export class RoadNetwork {
       if (!r.render || !r.lamps || r.lamps === 'none') continue;
       if (r.lamps === 'pole') place(r, r.lampSpacing ?? (r.type === 'highway' ? 70 : 42), r.type === 'highway' ? 3.2 : 2.8, poles);
       else if (r.lamps === 'lantern') place(r, 36, 2.2, lanterns);
+      else if (r.lamps === 'deck' && r.bridge) {
+        // lamp posts stand on the deck edge of elevated expressways
+        const step = Math.max(1, Math.round(45 / r.spacing));
+        for (let i = step; i < r.count - step; i += step) {
+          if (!r.bridge[i]) continue;
+          const side = (i / step) % 2 === 0 ? 1 : -1;
+          const o = side * (r.width / 2 + 0.5);
+          const x = r.xs[i] + r.tz[i] * o, z = r.zs[i] - r.tx[i] * o;
+          if (this._otherDeckAt(x, z, r.ys[i], r, 3)) continue;
+          poles.push({ x, y: r.ys[i], z, yaw: Math.atan2(r.xs[i] - x, r.zs[i] - z), deck: true });
+        }
+      }
     }
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
@@ -525,7 +606,7 @@ export class RoadNetwork {
    * down to the ground/lake bed, and a static collider for the deck.
    */
   _buildBridges() {
-    const slabGeos = [], pierList = [], railList = [];
+    const slabGeos = [], pierList = [], railList = [], barrierList = [];
     const spans = [];
     for (const r of this.all) {
       if (!r.bridge) continue;
@@ -579,31 +660,48 @@ export class RoadNetwork {
       }
       this.physics.addTrimesh(new Float32Array(verts), new Uint32Array(tris), boxes);
 
-      // piers every ~36 m, railings every ~2.4 m on both sides
+      // piers every ~36 m (not in the middle of a city street), railings along both sides
       const pierStep = Math.max(1, Math.round(36 / r.spacing));
       for (let i = a + pierStep; i < b - 2; i += pierStep) {
-        const ground = this.terrain.heightAt(r.xs[i], r.zs[i]);
-        const top = r.ys[i] - 1.1;
+        let k = i;
+        // slide the pier along a little if it would stand in a street
+        for (let t = 0; t < 6 && this.pierBlocked && this.pierBlocked(r.xs[k], r.zs[k]); t++) k = Math.min(b - 2, k + Math.round(4 / r.spacing));
+        if (this.pierBlocked && this.pierBlocked(r.xs[k], r.zs[k])) continue;
+        const ground = this.terrain.heightAt(r.xs[k], r.zs[k]);
+        const top = r.ys[k] - 1.1;
         if (top - ground < 1.5) continue;
-        pierList.push({ x: r.xs[i], z: r.zs[i], y0: ground - 2, y1: top, yaw: Math.atan2(r.tx[i], r.tz[i]), w: r.width });
+        if (this._otherDeckAt(r.xs[k], r.zs[k], r.ys[k], r, 4)) continue;
+        const yaw = Math.atan2(r.tx[k], r.tz[k]);
+        pierList.push({ x: r.xs[k], z: r.zs[k], y0: ground - 2, y1: top, yaw, w: r.width });
+        // the columns are solid (cars pass under between them)
+        const cs = 3.2 * (r.width / 12);
+        for (const side of [-1, 1]) {
+          const px = r.xs[k] + Math.cos(yaw) * cs * side, pz = r.zs[k] - Math.sin(yaw) * cs * side;
+          this.physics.addStaticCylinder(new THREE.Vector3(px, ground, pz), 1.1 * (r.width / 12), Math.max(1, (top - ground) / 2));
+        }
       }
-      const railStep = Math.max(1, Math.round(2.4 / r.spacing));
+      const concrete = r.railStyle === 'concrete';
+      const railStep = Math.max(1, Math.round((concrete ? 3 : 2.4) / r.spacing));
       for (let i = a; i <= b; i += railStep) {
         for (const side of [-1, 1]) {
           const off = side * (hw - 0.25);
-          railList.push({ x: r.xs[i] + r.tz[i] * off, y: r.ys[i], z: r.zs[i] - r.tx[i] * off, yaw: Math.atan2(r.tx[i], r.tz[i]) });
+          const x = r.xs[i] + r.tz[i] * off, z = r.zs[i] - r.tx[i] * off;
+          if (this._otherDeckAt(x, z, r.ys[i], r, 0.6)) continue;
+          (concrete ? barrierList : railList).push({ x, y: r.ys[i], z, yaw: Math.atan2(r.tx[i], r.tz[i]), side });
         }
       }
-      // railings are solid for cars
+      // railings are solid for cars (open where another deck merges)
       for (let i = a; i < b; i += 2) {
         const j = Math.min(b, i + 2);
         for (const side of [-1, 1]) {
           const off = side * (hw - 0.2);
           const x = (r.xs[i] + r.xs[j]) / 2 + r.tz[i] * off, z = (r.zs[i] + r.zs[j]) / 2 - r.tx[i] * off;
+          if (this._otherDeckAt(x, z, r.ys[i], r, 0.6)) continue;
           this.physics.addStaticBox(new THREE.Vector3(x, (r.ys[i] + r.ys[j]) / 2 + 0.6, z),
             new THREE.Vector3(0.15, 0.6, Math.hypot(r.xs[j] - r.xs[i], r.zs[j] - r.zs[i]) / 2 + 0.4), Math.atan2(r.tx[i], r.tz[i]));
         }
       }
+      if (r.suspension) this._suspension(r, a, b);
     }
     if (!spans.length) return;
     const concrete = new THREE.MeshStandardMaterial({ color: 0x9a968f, roughness: 0.85 });
@@ -644,7 +742,92 @@ export class RoadNetwork {
     rails.castShadow = true;
     rails.computeBoundingSphere();
     this.scene.add(rails);
-    this.instanceCount += pierList.length * 2 + railList.length;
+    // expressway barriers: concrete parapet with a steel top rail, 3 m segments
+    if (barrierList.length) {
+      const barrierGeo = mergeGeometries([
+        new THREE.BoxGeometry(0.45, 0.95, 3.05).translate(0, 0.47, 0),
+        new THREE.BoxGeometry(0.12, 0.1, 3.05).translate(0, 1.2, 0),
+        new THREE.BoxGeometry(0.08, 0.3, 0.08).translate(0, 1.05, 0),
+      ]);
+      const barrierMat = new THREE.MeshStandardMaterial({ color: 0xb7b4ac, roughness: 0.8 });
+      const bars = new ChunkedInstances(this.scene, barrierGeo, barrierMat, barrierList, {
+        chunk: 300, receiveShadow: true,
+        write: (b, mm) => { q.setFromAxisAngle(up, b.yaw); mm.compose(p.set(b.x, b.y, b.z), q, s); },
+      });
+      this.barrierChunks = bars;
+    }
+    this.instanceCount += pierList.length * 2 + railList.length + barrierList.length;
+  }
+
+  /** Suspension bridge dressing: two H-towers over the water, main cables and hangers. */
+  _suspension(r, a, b) {
+    // the part over the sea
+    let w0 = -1, w1 = -1;
+    for (let i = a; i <= b; i++) {
+      if (this.terrain.waterLevelAt(r.xs[i], r.zs[i]) != null && this.terrain.heightAt(r.xs[i], r.zs[i]) < -1) { if (w0 < 0) w0 = i; w1 = i; }
+    }
+    if (w0 < 0 || w1 - w0 < 40) return;
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.45, metalness: 0.5 });
+    const cableMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.4, metalness: 0.7 });
+    const hw = r.width / 2 + 1.6;
+    const H = 58;
+    const towers = [w0 + Math.round((w1 - w0) * 0.22), w0 + Math.round((w1 - w0) * 0.78)];
+    const geos = [];
+    for (const i of towers) {
+      const yaw = Math.atan2(r.tx[i], r.tz[i]);
+      const base = SEA_BED;
+      const g = mergeGeometries([
+        new THREE.BoxGeometry(2.4, H - base, 3).translate(-hw, (H + base) / 2, 0),
+        new THREE.BoxGeometry(2.4, H - base, 3).translate(hw, (H + base) / 2, 0),
+        new THREE.BoxGeometry(hw * 2 + 2.4, 2.2, 3).translate(0, H - 1.1, 0),
+        new THREE.BoxGeometry(hw * 2 + 2.4, 1.8, 2.6).translate(0, H * 0.62, 0),
+        new THREE.BoxGeometry(hw * 2 + 2.4, 1.6, 2.6).translate(0, r.ys[i] - 2.2, 0),
+      ]).rotateY(yaw).translate(r.xs[i], 0, r.zs[i]);
+      geos.push(g);
+      for (const side of [-1, 1]) {
+        this.physics.addStaticBox(new THREE.Vector3(r.xs[i] + Math.cos(yaw) * hw * side, (H + base) / 2, r.zs[i] - Math.sin(yaw) * hw * side), new THREE.Vector3(1.2, (H - base) / 2, 1.5), yaw);
+      }
+    }
+    const tm = new THREE.Mesh(mergeGeometries(geos), mat);
+    tm.castShadow = true; tm.receiveShadow = true;
+    this.scene.add(tm);
+    // main cables: anchored at the deck ends of the water span, sagging between the towers
+    const cablePts = (side) => {
+      const pts = [];
+      const anchors = [Math.max(a, w0 - 20), towers[0], towers[1], Math.min(b, w1 + 20)];
+      const topY = (i) => (i === towers[0] || i === towers[1] ? H - 0.5 : r.ys[i] + 1.2);
+      for (let seg = 0; seg < 3; seg++) {
+        const i0 = anchors[seg], i1 = anchors[seg + 1];
+        const sag = seg === 1 ? 26 : 0;
+        for (let i = i0; i <= i1; i += 2) {
+          const t = (i - i0) / Math.max(1, i1 - i0);
+          const y = topY(i0) + (topY(i1) - topY(i0)) * t - sag * 4 * t * (1 - t) * (seg === 1 ? 1 : 0);
+          const yy = seg === 1 ? Math.max(y, r.ys[i] + 2) : y;
+          pts.push(new THREE.Vector3(r.xs[i] + r.tz[i] * hw * side, yy, r.zs[i] - r.tx[i] * hw * side));
+        }
+      }
+      return pts;
+    };
+    const cableGeos = [], hangerList = [];
+    for (const side of [-1, 1]) {
+      const pts = cablePts(side);
+      cableGeos.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, 0.35, 6, false));
+      for (let k = 0; k < pts.length; k += 2) {
+        const pt = pts[k];
+        const i = r.nearestIndex(pt.x, pt.z);
+        const hgt = pt.y - r.ys[i] - 1;
+        if (hgt > 1.5) hangerList.push({ x: pt.x, y: r.ys[i] + 1, z: pt.z, h: hgt });
+      }
+    }
+    const cm = new THREE.Mesh(mergeGeometries(cableGeos), cableMat);
+    cm.castShadow = true;
+    this.scene.add(cm);
+    const hg = new THREE.CylinderGeometry(0.07, 0.07, 1, 4).translate(0, 0.5, 0);
+    const hm = new THREE.InstancedMesh(hg, cableMat, hangerList.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+    hangerList.forEach((h, k) => hm.setMatrixAt(k, m.compose(p.set(h.x, h.y, h.z), q, s.set(1, h.h, 1))));
+    hm.computeBoundingSphere();
+    this.scene.add(hm);
   }
 
   /** Closest road (route or connector) to a point: { route, index, d2 }. */

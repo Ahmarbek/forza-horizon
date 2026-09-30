@@ -1,30 +1,34 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createPetalMaterial } from './Shaders.js';
-import { Terrain, WORLD_HALF, SEA_LEVEL, LAKE, coastLine } from './world/Terrain.js';
-import { RoadNetwork, CITY_RECT, MINATO_RECT, MINATO_STEP, MINATO_STREET_WIDTH, MINATO_Y, AIRFIELD } from './world/Roads.js';
+import { Terrain, WORLD_HALF, SEA_LEVEL, LAKE, ISLAND, coastLine } from './world/Terrain.js';
+import { RoadNetwork, CITY_RECT, CITY_STREET_STEP, CITY_STREET_WIDTH, ITO_RECT, ITO_STEP, ITO_STREET_WIDTH, ITO_Y } from './world/Roads.js';
 import { City } from './world/City.js';
 import { Vegetation } from './world/Vegetation.js';
 import { Atmosphere } from './world/Atmosphere.js';
 import { Water } from './world/Water.js';
 import { Landmarks } from './world/Landmarks.js';
+import { Countryside } from './world/Countryside.js';
 import { SurfaceMap } from './world/Surfaces.js';
 import { SURFACE } from './Vehicle.js';
 import { installHeightFog, patchFogMaterials } from './world/Fog.js';
 import { mulberry32 } from './world/Noise.js';
+import { regionName, REGIONS } from './world/Regions.js';
 
 /**
  * Environment.js
  * --------------
- * Assembles the 8 km open world:
+ * Assembles the 8 km open world, a compact "Horizon Japan":
  *  - Atmosphere (physical sky, clouds, sun/moon, fog, IBL)
- *  - Terrain (hills, Summit massif, coast, lake, border ranges) + heightfield physics
- *  - Road network (Festival Loop, Horizon Highway, Fuji Pass, Coastal Road,
- *    Lakeside Loop with its bridge, Summit Road, Kiso forest trail, runway,
- *    connectors) and the surface map that tells tyres what they drive on
- *  - Neon City downtown and the Minato Bay harbour town
- *  - Ocean and Lake Sakura, landmarks (wind farm, pagoda, lighthouse, village,
- *    observatory, airfield, Ferris wheel)
+ *  - Terrain (east coast, Legend Island, rice plains, crater lake, Alps) +
+ *    heightfield physics
+ *  - Road network: Festival Loop, Horizon Expressway, the elevated C1 loop
+ *    over Tokyo with its link and the Tokyo Bay Bridge, Ito coast road,
+ *    Ohtani Pass, Haruna touge, Shimanoyama lake loop, Sotoyama Skyline,
+ *    Nangan forest trail, Legend Island circuit, farm lanes — and the surface
+ *    map that tells tyres what they drive on
+ *  - Tokyo City (downtown, docks, industrial, suburbs) and Ito harbour town
+ *  - Ocean and the crater lake, landmarks and countryside dressing
  *  - Forests, sakura groves and GPU grass
  *  - Festival site: plaza, gantry, cones, danger-sign ramps, stunt zones,
  *    race checkpoint gates, falling petals, distant Mt. Fuji backdrop
@@ -69,19 +73,20 @@ export class Environment {
     const terrain = new Terrain();
     this.terrain = terrain;
     terrain.addFlatRect(FESTIVAL_ZONE.minX, FESTIVAL_ZONE.minZ, FESTIVAL_ZONE.maxX, FESTIVAL_ZONE.maxZ, 170, 0);
-    terrain.addFlatRect(CITY_RECT.minX - 40, CITY_RECT.minZ - 40, CITY_RECT.maxX + 40, CITY_RECT.maxZ + 40, 170, 0);
-    terrain.addFlatRect(MINATO_RECT.minX - 30, MINATO_RECT.minZ - 30, MINATO_RECT.maxX + 30, MINATO_RECT.maxZ + 30, 150, MINATO_Y);
-    this.airfieldZone = terrain.addFlatRect(AIRFIELD.minX, AIRFIELD.minZ, AIRFIELD.maxX, AIRFIELD.maxZ, 160, 'auto');
+    // Tokyo reaches the sea wall (docks + dock strip), so its flat zone runs out to the quay
+    terrain.addFlatRect(CITY_RECT.minX - 90, CITY_RECT.minZ - 40, CITY_RECT.maxX + 40, CITY_RECT.maxZ + 40, 170, 0);
+    terrain.addFlatRect(ITO_RECT.minX - 30, ITO_RECT.minZ - 30, ITO_RECT.maxX + 30, ITO_RECT.maxZ + 30, 150, ITO_Y);
+    // Legend Island festival grounds on the island's crown
+    this.legendZone = terrain.addFlatCircle(ISLAND.x - 30, ISLAND.z, 120, 70, 'auto');
     const roads = new RoadNetwork(scene, physics, renderer, terrain);
     this.roads = roads;
     this.routes = roads.routes;
-    this.routes.airfield.flat = true;
-    this.routes.airfield.flatY = this.airfieldZone.y;
+    roads.pierBlocked = (x, z) => this._inCityStreet(x, z);
     for (const [x, z] of roads.junctions()) terrain.addFlatCircle(x, z, 30, 110, 'auto', true);
     this._defineRamps();
     terrain.build(roads.all);
     mark('terrain');
-    terrain.buildMask(roads.all, [CITY_RECT, MINATO_RECT]);
+    terrain.buildMask(roads.all, [CITY_RECT, ITO_RECT, { minX: CITY_RECT.minX - 100, maxX: CITY_RECT.minX, minZ: CITY_RECT.minZ - 60, maxZ: CITY_RECT.maxZ + 60 }]);
     mark('masks');
     scene.add(terrain.createMesh());
     physics.addHeightfield(terrain.seg, terrain.physicsHeights(), terrain.size, terrain);
@@ -95,21 +100,39 @@ export class Environment {
     this._buildSurfaces();
     mark('roads');
 
-    await step(0.48, 'Raising Neon City and Minato Bay…');
-    this.city = new City(scene, physics, renderer).build(roads.textures);
-    this.minato = new City(scene, physics, renderer, {
-      name: 'Minato Bay', rect: MINATO_RECT, step: MINATO_STEP, streetWidth: MINATO_STREET_WIDTH,
-      baseY: MINATO_Y, seed: 777, style: 'harbor', parks: [8, 21],
+    await step(0.48, 'Raising Tokyo City and Ito…');
+    const elevated = this.roads.all.filter((r) => r.elevated);
+    this.city = new City(scene, physics, renderer, {
+      name: 'Tokyo City', rect: CITY_RECT, step: CITY_STREET_STEP, streetWidth: CITY_STREET_WIDTH, style: 'tokyo', seed: 4242,
+      parks: [], tokyo: true,
+      // lots under the expressways stay open (parking under the viaduct)
+      clear: (x, z, pad) => elevated.some((r) => { r.nearestIndex(x, z); return r.lastDistanceSq < (r.width / 2 + pad) ** 2 && r.ys[r.nearestIndex(x, z)] > 4; }),
     }).build(roads.textures);
-    this.cities = [this.city, this.minato];
+    this.ito = new City(scene, physics, renderer, {
+      name: 'Ito', rect: ITO_RECT, step: ITO_STEP, streetWidth: ITO_STREET_WIDTH,
+      baseY: ITO_Y, seed: 777, style: 'harbor', parks: [5],
+    }).build(roads.textures);
+    this.cities = [this.city, this.ito];
     for (const c of this.cities) this.instanceCount += c.instanceCount;
     mark('cities');
 
     await step(0.56, 'Filling the lake and the ocean…');
     this.water = new Water(scene, terrain).build();
     this.landmarks = new Landmarks(scene, physics, terrain, roads).build();
-    this.labels = this.landmarks.labels;
+    this.landmarks.legendStage(this.legendZone);
     mark('water + landmarks');
+
+    await step(0.6, 'Building villages, power lines and the Shinkansen…');
+    this.countryside = new Countryside({
+      scene, physics, terrain, roads,
+      avoid: (x, z) => this.cities.some((c) => c.contains(x, z, 40)) || this.landmarks.blocks(x, z)
+        || (x > FESTIVAL_ZONE.minX - 40 && x < FESTIVAL_ZONE.maxX + 40 && z > FESTIVAL_ZONE.minZ - 40 && z < FESTIVAL_ZONE.maxZ + 40)
+        || Math.hypot(x - this.legendZone.x, z - this.legendZone.z) < 170,
+    }).build();
+    this.instanceCount += this.countryside.instanceCount;
+    this.labels = [...this.landmarks.labels, ...this.countryside.labels];
+    this.regions = REGIONS;
+    mark('countryside');
 
     await step(0.62, 'Setting up the festival…');
     this._buildPlaza();
@@ -147,15 +170,15 @@ export class Environment {
         sakuraRows.push({ x, z, type: 'sakura' });
       }
     }
-    const extraSpots = [...sakuraRows];
+    const extraSpots = [...sakuraRows, ...this.countryside.treeSpots, ...this.landmarks.treeSpots];
     for (const c of this.cities) extraSpots.push(...c.treeSpots);
     this.veg.build({
       renderer,
       festivalCenter: FESTIVAL_CENTER,
       extraSpots,
       avoid: (x, z) => this.inPlaza(x, z, 12) || this.inClearZone(x, z)
-        || this.cities.some((c) => c.contains(x, z, 25)) || this.landmarks.blocks(x, z)
-        || (x > AIRFIELD.minX - 60 && x < AIRFIELD.maxX + 60 && z > AIRFIELD.minZ - 140 && z < AIRFIELD.maxZ + 60)
+        || this.cities.some((c) => c.contains(x, z, 25)) || this.landmarks.blocks(x, z) || this.countryside.blocks(x, z)
+        || this.countryside.nearRail(x, z) || this._nearElevated(x, z)
         || terrain.isWater(x, z, -1.5) || terrain.mask2At(x, z, 0) > 0.35
         || (terrain.mask2At(x, z, 1) > 0.5 && this.rng() < 0.93),
     });
@@ -187,22 +210,43 @@ export class Environment {
     return this.cities?.find((c) => c.contains(x, z, margin)) ?? null;
   }
 
-  /** Region name for the HUD banner. */
+  /** Region name for the HUD banner (the ten regions of the map, plus towns and districts). */
   regionAt(x, z) {
-    const city = this.cityAt(x, z, 20);
-    if (city) return city.name;
-    if (x > FESTIVAL_ZONE.minX && x < FESTIVAL_ZONE.maxX && z > FESTIVAL_ZONE.minZ && z < FESTIVAL_ZONE.maxZ) return 'Festival Site';
-    if (x > AIRFIELD.minX - 150 && x < AIRFIELD.maxX + 150 && z > AIRFIELD.minZ - 200 && z < AIRFIELD.maxZ + 150) return 'Airfield';
-    if (Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 450) return 'Lake Sakura';
-    if (this.terrain.farmWeight(x, z) > 0.5) return 'Sakura Village';
-    const dc = x - coastLine(z);
-    if (dc > -380) return z > 700 && z < 2600 ? 'Sea Cliffs' : 'Sunset Beach';
-    if (Math.hypot((x + 1650) / 900, (z + 3050) / 800) < 1) return this.terrain.heightAt(x, z) > 230 ? 'Summit Snowfields' : 'Summit Road';
-    if (Math.hypot((x + 2800) / 800, (z - 300) / 1400) < 1) return 'Kiso Forest';
-    if (Math.hypot((x - 1650) / 700, (z - 2350) / 800) < 1) return 'Wind Farm Downs';
-    const n = this.roads.nearest(x, z);
-    if (n.d2 < 60 * 60 && n.route.name) return n.route.name;
-    return 'Countryside';
+    if (this.city && this.city.contains(x, z, 20)) return `Tokyo City · ${this.city.districtAt(x, z)}`;
+    if (this.ito && this.ito.contains(x, z, 20)) return 'Ito Harbour';
+    if (x > FESTIVAL_ZONE.minX && x < FESTIVAL_ZONE.maxX && z > FESTIVAL_ZONE.minZ && z < FESTIVAL_ZONE.maxZ) return 'Horizon Festival';
+    return regionName(x, z);
+  }
+
+  /** true under/next to an elevated expressway (no trees growing through the deck). */
+  _nearElevated(x, z) {
+    if (!this._elevHash) {
+      this._elevHash = new Map();
+      for (const r of this.roads.all) {
+        if (!r.elevated) continue;
+        for (let i = 0; i < r.count; i += 3) {
+          const k = `${Math.floor(r.xs[i] / 30)},${Math.floor(r.zs[i] / 30)}`;
+          if (!this._elevHash.has(k)) this._elevHash.set(k, []);
+          this._elevHash.get(k).push(r.xs[i], r.zs[i], r.width / 2 + 9);
+        }
+      }
+    }
+    const cx = Math.floor(x / 30), cz = Math.floor(z / 30);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const l = this._elevHash.get(`${cx + a},${cz + b}`);
+      if (l) for (let i = 0; i < l.length; i += 3) if (Math.hypot(l[i] - x, l[i + 1] - z) < l[i + 2]) return true;
+    }
+    return false;
+  }
+
+  /** true inside a Tokyo street (no expressway piers there). */
+  _inCityStreet(x, z) {
+    const R = CITY_RECT;
+    if (x < R.minX - 12 || x > R.maxX + 12 || z < R.minZ - 12 || z > R.maxZ + 12) return false;
+    const hs = CITY_STREET_WIDTH / 2 + 2.5;
+    const fx = ((x - R.minX) % CITY_STREET_STEP + CITY_STREET_STEP) % CITY_STREET_STEP;
+    const fz = ((z - R.minZ) % CITY_STREET_STEP + CITY_STREET_STEP) % CITY_STREET_STEP;
+    return fx < hs || fx > CITY_STREET_STEP - hs || fz < hs || fz > CITY_STREET_STEP - hs;
   }
 
   inPlaza(x, z, margin = 0) {
@@ -219,7 +263,17 @@ export class Environment {
   }
 
   /** Nearest drivable road for resets: { point, yaw, route?, index? }. */
-  nearestRoad(x, z) {
+  nearestRoad(x, z, y = null) {
+    // up on an expressway deck: stay on it
+    if (y != null) {
+      for (const r of this.roads.all) {
+        if (!r.elevated) continue;
+        const i = r.nearestIndex(x, z);
+        if (r.lastDistanceSq < (r.width / 2 + 4) ** 2 && y > r.ys[i] - 4 && r.ys[i] > 3) {
+          return { point: r.point(i, 0, new THREE.Vector3()), yaw: r.yaw(i), route: r, index: i };
+        }
+      }
+    }
     // inside a town, snap to the closest street centre-line instead
     const city = this.cityAt(x, z, 5);
     if (city) {
@@ -238,18 +292,19 @@ export class Environment {
   _setStarts() {
     const r = this.routes;
     r.festival.startIndex = r.festival.nearestIndex(0, -30);
-    r.city.startIndex = r.city.nearestIndex(-1375, 800);
-    r.highway.startIndex = r.highway.nearestIndex(870, -150);
-    r.mountain.startIndex = r.mountain.nearestIndex(-470, -300);
-    r.coast.startIndex = r.coast.nearestIndex(2555, 250);
-    r.lake.startIndex = r.lake.nearestIndex(203, 2230);
-    r.rally.startIndex = r.rally.nearestIndex(-2330, 330);
-    r.minato.startIndex = r.minato.nearestIndex(2150, -700);
-    r.summit.startIndex = Math.round(45 / r.summit.spacing);
-    r.airfield.startIndex = r.airfield.nearestIndex(-1740, 2700);
-    // sprint finish lines (open routes)
-    r.summit.finishIndex = r.summit.count - 1 - Math.round(25 / r.summit.spacing);
-    r.airfield.finishIndex = r.airfield.nearestIndex(-2740, 2700);
+    r.city.startIndex = r.city.nearestIndex(-1575, -1000);
+    r.highway.startIndex = r.highway.nearestIndex(-1070, -900);
+    r.mountain.startIndex = r.mountain.nearestIndex(-100, 400);
+    r.c1.startIndex = r.c1.nearestIndex(-1900, -1112);
+    r.lake.startIndex = r.lake.nearestIndex(2400, 1420);
+    r.rally.startIndex = r.rally.nearestIndex(300, -2500);
+    r.ito.startIndex = r.ito.nearestIndex(-2450, -2450);
+    r.island.startIndex = r.island.nearestIndex(-3700, -290);
+    // open routes: sprint start and finish
+    for (const k of ['coast', 'touge', 'summit', 'docks']) {
+      r[k].startIndex = Math.round(45 / r[k].spacing);
+      r[k].finishIndex = r[k].count - 1 - Math.round(30 / r[k].spacing);
+    }
     this.startPosition = new THREE.Vector3(0, 1.2, -75);
     this.startYaw = 0;
   }
@@ -262,9 +317,11 @@ export class Environment {
       else if (r.render) S.paintRoute(r, SURFACE.asphalt, SURFACE.gravel, r.type === 'runway' ? 1 : 2.4);
     }
     // street circuits + paved areas
-    for (const R of [CITY_RECT, MINATO_RECT]) S.paintRect(R.minX - 12, R.minZ - 12, R.maxX + 12, R.maxZ + 12, SURFACE.asphalt);
+    for (const R of [CITY_RECT, ITO_RECT]) S.paintRect(R.minX - 12, R.minZ - 12, R.maxX + 12, R.maxZ + 12, SURFACE.asphalt);
+    S.paintRect(CITY_RECT.minX - 90, CITY_RECT.minZ, CITY_RECT.minX, CITY_RECT.maxZ, SURFACE.concrete); // quay
     S.paintRect(PLAZA.minX, PLAZA.minZ, PLAZA.maxX, PLAZA.maxZ, SURFACE.asphalt);
-    S.paintRect(AIRFIELD.minX, AIRFIELD.minZ, AIRFIELD.maxX, AIRFIELD.minZ + 30, SURFACE.concrete);
+    const L = this.legendZone;
+    S.paintRect(L.x - 80, L.z - 60, L.x + 80, L.z + 60, SURFACE.asphalt);
     // re-assert asphalt on the main roads over any shoulder paint
     for (const r of this.roads.all) if (r.render && r.type !== 'dirt') S.paintRoute(r, SURFACE.asphalt, SURFACE.asphalt, 0);
     this.surfaces = S;
@@ -346,7 +403,8 @@ export class Environment {
     this.ramps = [
       { id: 'ramp-west', name: 'Sakura Leap', x: -130, z: -170, yaw: 0, width: 9, length: 15, height: 3.4, y: 0 },
       { id: 'ramp-north', name: 'Fuji Sky Jump', x: -250, z: 70, yaw: Math.PI / 2, width: 9, length: 16, height: 4.2, y: 0 },
-      { id: 'ramp-airfield', name: 'Airfield Launch', x: -2050, z: 2748, yaw: -Math.PI / 2, width: 10, length: 18, height: 5.2, y: this.airfieldZone.y },
+      { id: 'ramp-docks', name: 'Dockyard Launch', x: -2745, z: 175, yaw: 0, width: 10, length: 18, height: 5.2, y: 0 },
+      { id: 'ramp-legend', name: 'Legend Leap', x: this.legendZone.x + 20, z: this.legendZone.z - 95, yaw: Math.PI / 2, width: 10, length: 16, height: 4.6, y: this.legendZone.y },
     ];
     for (const r of this.ramps) {
       this.clearZones.push({ x: r.x, z: r.z, cos: Math.cos(r.yaw), sin: Math.sin(r.yaw), hw: 22, z0: -110, z1: 130 });
@@ -525,23 +583,29 @@ export class Environment {
   _buildStunts() {
     const R = this.routes;
     const at = (route, x, z) => route.nearestIndex(x, z);
+    const C = (id) => this.roads.all.find((r) => r.id === id);
     this.stunts = [
       { id: 'trap-gantry', type: 'trap', name: 'Gantry Speed Trap', route: R.festival, index: at(R.festival, 0, 25), stars: [90, 115, 135] },
       { id: 'trap-east', type: 'trap', name: 'Riverside Trap', route: R.festival, index: at(R.festival, 320, 90), stars: [75, 95, 115] },
-      { id: 'zone-lakeside', type: 'zone', name: 'Lakeside Speed Zone', route: R.festival, index: at(R.festival, 250, 240), end: at(R.festival, 300, 40), stars: [70, 90, 105] },
+      { id: 'zone-lakeside', type: 'zone', name: 'Festival Speed Zone', route: R.festival, index: at(R.festival, 250, 240), end: at(R.festival, 300, 40), stars: [70, 90, 105] },
       { id: 'drift-temple', type: 'drift', name: 'Temple Drift Zone', route: R.festival, index: at(R.festival, 150, -250), end: at(R.festival, -10, -260), stars: [6000, 14000, 25000] },
-      { id: 'trap-skyline', type: 'trap', name: 'Skyline Speed Trap', route: R.highway, index: at(R.highway, -800, 1720), stars: [120, 145, 165] },
-      { id: 'zone-coast', type: 'zone', name: 'Coastal Speed Zone', route: R.highway, index: at(R.highway, 880, 0), end: at(R.highway, 820, 700), stars: [100, 125, 145] },
-      { id: 'drift-fuji', type: 'drift', name: 'Fuji Pass Drift Zone', route: R.mountain, index: at(R.mountain, -520, -700), end: at(R.mountain, -700, -1020), stars: [8000, 18000, 32000] },
-      { id: 'trap-neon', type: 'trap', name: 'Neon Speed Trap', route: R.city, index: at(R.city, -1000, 625), stars: [70, 90, 110] },
-      { id: 'trap-cliff', type: 'trap', name: 'Cliffside Speed Trap', route: R.coast, index: at(R.coast, 2575, 1050), stars: [110, 135, 155] },
-      { id: 'zone-beach', type: 'zone', name: 'Sunset Beach Speed Zone', route: R.coast, index: at(R.coast, 2560, 700), end: at(R.coast, 2556, -60), stars: [105, 130, 150] },
-      { id: 'trap-bridge', type: 'trap', name: 'Sakura Bridge Speed Trap', route: R.lake, index: at(R.lake, 212, 2780), stars: [90, 110, 128] },
-      { id: 'drift-summit', type: 'drift', name: 'Summit Hairpins Drift Zone', route: R.summit, index: at(R.summit, -1050, -2400), end: at(R.summit, -1750, -2550), stars: [9000, 20000, 36000] },
-      { id: 'drift-kiso', type: 'drift', name: 'Kiso Forest Drift Zone', route: R.rally, index: at(R.rally, -3300, 700), end: at(R.rally, -3100, -400), stars: [9000, 20000, 34000] },
-      { id: 'zone-runway', type: 'zone', name: 'Runway Speed Zone', route: R.airfield, index: at(R.airfield, -1800, 2700), end: at(R.airfield, -2900, 2700), stars: [120, 150, 175] },
-      { id: 'trap-harbour', type: 'trap', name: 'Harbour Speed Trap', route: R.minato, index: at(R.minato, 2450, -400), stars: [65, 85, 100] },
-      { id: 'trap-farm', type: 'trap', name: 'Paddy Fields Speed Trap', route: R.coast, index: at(R.coast, 1215, -2300), stars: [95, 118, 135] },
+      { id: 'trap-skyline', type: 'trap', name: 'Expressway Speed Trap', route: R.highway, index: at(R.highway, -1100, 1000), stars: [120, 145, 165] },
+      { id: 'zone-hokubu', type: 'zone', name: 'Hokubu Plains Speed Zone', route: R.highway, index: at(R.highway, -450, 1482), end: at(R.highway, 300, 1500), stars: [110, 135, 155] },
+      { id: 'drift-ohtani', type: 'drift', name: 'Ohtani Pass Drift Zone', route: R.mountain, index: at(R.mountain, -160, 1000), end: at(R.mountain, -760, 960), stars: [8000, 18000, 32000] },
+      { id: 'trap-c1', type: 'trap', name: 'C1 Speed Trap', route: R.c1, index: at(R.c1, -1850, -1112), stars: [100, 125, 145] },
+      { id: 'zone-c1', type: 'zone', name: 'C1 Speed Zone', route: R.c1, index: at(R.c1, -2387, -780), end: at(R.c1, -2387, -420), stars: [90, 112, 130] },
+      { id: 'trap-neon', type: 'trap', name: 'Shibuya Speed Trap', route: R.city, index: at(R.city, -1950, -150), stars: [70, 90, 110] },
+      { id: 'trap-cliff', type: 'trap', name: 'Ito Cliffs Speed Trap', route: R.coast, index: at(R.coast, -2150, -3200), stars: [105, 128, 148] },
+      { id: 'zone-beach', type: 'zone', name: 'Ito Seaside Speed Zone', route: R.coast, index: at(R.coast, -2400, -1550), end: at(R.coast, -2480, -1800), stars: [100, 122, 142] },
+      { id: 'trap-bridge', type: 'trap', name: 'Lake Loop Speed Trap', route: R.lake, index: at(R.lake, 2470, 1560), stars: [90, 110, 128] },
+      { id: 'drift-haruna', type: 'drift', name: 'Haruna Drift Zone', route: R.touge, index: at(R.touge, 1600, 900), end: at(R.touge, 1850, 1250), stars: [9000, 20000, 36000] },
+      { id: 'drift-summit', type: 'drift', name: 'Sotoyama Hairpins Drift Zone', route: R.summit, index: at(R.summit, -120, 2420), end: at(R.summit, -450, 2880), stars: [9000, 20000, 36000] },
+      { id: 'drift-kiso', type: 'drift', name: 'Nangan Forest Drift Zone', route: R.rally, index: at(R.rally, 500, -2450), end: at(R.rally, 1500, -3050), stars: [9000, 20000, 34000] },
+      { id: 'zone-runway', type: 'zone', name: 'Dock Strip Speed Zone', route: R.docks, index: at(R.docks, -2752, -1100), end: at(R.docks, -2752, 0), stars: [120, 150, 175] },
+      { id: 'trap-legend', type: 'trap', name: 'Legend Island Speed Trap', route: R.island, index: at(R.island, -3700, -290), stars: [85, 105, 125] },
+      { id: 'trap-bay', type: 'trap', name: 'Bay Bridge Speed Trap', route: C('c-bay-bridge'), index: at(C('c-bay-bridge'), -3000, -489), stars: [115, 140, 160] },
+      { id: 'trap-harbour', type: 'trap', name: 'Ito Harbour Speed Trap', route: R.ito, index: at(R.ito, -2250, -2250), stars: [65, 85, 100] },
+      { id: 'trap-farm', type: 'trap', name: 'Minamino Paddies Speed Trap', route: C('c-fest-minamino'), index: at(C('c-fest-minamino'), 1300, -500), stars: [90, 110, 130] },
     ];
     for (const r of this.ramps) this.stunts.push({ id: r.id, type: 'jump', name: r.name, ramp: r, stars: [40, 70, 100] });
 
@@ -604,7 +668,7 @@ export class Environment {
       const f = 1 + Math.sin(a * 23) * 0.025 * (1 - y / H) + Math.sin(a * 7 + 1) * 0.03 * (1 - y / H);
       fp.setX(k, x * f); fp.setZ(k, z * f);
     }
-    fuji.translate(-2600, -80, 12800);
+    fuji.translate(12500, -80, -1800); // west, beyond the border range (Tokyo looks out to sea)
     fuji.deleteAttribute('uv');
     colorize(fuji, -80, H, 0.55);
     fuji.computeVertexNormals();
@@ -634,7 +698,7 @@ export class Environment {
     const heightAt = (x, z, r0, r) => {
       let h = t._rawHeight(x, z);
       const grow = THREE.MathUtils.smoothstep(r, r0 + 200, r0 + 4500);
-      if (x < coastLine(z) - 300) h += grow * (ridgedFar(x / 2600, z / 2600) * 1700 + 150);
+      if (x > coastLine(z) + 300) h += grow * (ridgedFar(x / 2600, z / 2600) * 1700 + 150);
       return h;
     };
     const grid = [];
@@ -703,6 +767,7 @@ export class Environment {
     this.roads.lampMaterial.emissiveIntensity = 0.3 + lamps * 5;
     for (const c of this.cities) c.setNight(lamps);
     this.landmarks.setNight(lamps);
+    this.countryside?.setNight(lamps);
     this.water.setNight(n);
     if (this.gantryMat) this.gantryMat.emissiveIntensity = 1 + lamps * 2.5;
     if (this.veg) {
@@ -728,6 +793,8 @@ export class Environment {
     this.veg.update(dt, camera);
     this.water.update(dt);
     this.landmarks.update(dt);
+    for (const c of this.cities) c.update?.(dt);
+    this.countryside.update(dt, camera.position);
     const pu = this.petals.material.uniforms;
     pu.uTime.value = this.time;
     pu.uCenter.value.copy(camera.position);

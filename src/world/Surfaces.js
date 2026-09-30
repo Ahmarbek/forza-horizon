@@ -85,7 +85,7 @@ export class SurfaceMap {
     const h = t.heightAt(x, z);
     const e = 2;
     const slope = Math.hypot(t.heightAt(x + e, z) - t.heightAt(x - e, z), t.heightAt(x, z + e) - t.heightAt(x, z - e)) / (2 * e);
-    const snowLine = t.snowLine ?? 230;
+    const snowLine = (t.snowLine ?? 230) - 160 * Math.min(1, Math.max(0, (z - 2400) / 800)) ** 2 * (3 - 2 * Math.min(1, Math.max(0, (z - 2400) / 800)));
     if (h > snowLine + fbm(x / 40, z / 40, 2) * 50 && slope < 0.8) return SURFACE.snow.id;
     if (slope > 0.55) return SURFACE.rock.id;
     const water = t.waterLevel ?? -1000;

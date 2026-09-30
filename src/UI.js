@@ -30,8 +30,10 @@ const TIPS = [
   'Traction control and ABS can be switched off in Settings for more slide.',
   'Manual gearbox: E / Q (gamepad B / X). Short-shift for traction in the wet… or in the gravel.',
   'Speed traps and zones reward stars — beat all three for bonus credits.',
-  'Summit Road climbs above the snow line. Take it slow on the hairpins.',
-  'The Coastal Circuit is a 12 km lap past cliffs, beaches and paddy fields.',
+  'The Sotoyama Skyline climbs to the ski resort. Take it slow on the hairpins.',
+  'The C1 Loop is an elevated expressway ring over Tokyo — reach it from the Horizon Expressway.',
+  'Legend Island lies across the Tokyo Bay Bridge, east of the docks.',
+  'The Shinkansen runs from Tokyo across the Hokubu rice plains.',
   'Engine upgrades raise top speed; tyre upgrades help everywhere.',
 ];
 const STUNT_COLORS = { trap: '#2de2ff', zone: '#2de2ff', drift: '#b36bff', jump: '#ffd23f' };
@@ -580,7 +582,7 @@ export class UI {
       ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.lineWidth = Math.max(3.5 * dpr, r.width * s * 1.4 + 2 * dpr);
       ctx.stroke();
-      ctx.strokeStyle = r.type === 'highway' ? '#ffd23f' : r.type === 'dirt' ? '#d8b98a' : '#f2f2f2';
+      ctx.strokeStyle = r.elevated ? '#c9a6ff' : r.type === 'highway' ? '#ffd23f' : r.type === 'dirt' ? '#d8b98a' : '#f2f2f2';
       ctx.lineWidth = Math.max(2 * dpr, r.width * s * 1.4);
       ctx.stroke();
     }
@@ -685,18 +687,41 @@ export class UI {
     for (const bcn of this.beacons || []) taken.push(box(X(bcn.pos.x), Y(bcn.pos.z), 22 * dpr, 22 * dpr));
     taken.push(box(X(p.x), Y(p.z), 26 * dpr, 26 * dpr));
     const ls = Math.min(22, 12 + M.zoom * 2);
-    const names = [
-      ['NEON CITY', (env.city.rect.minX + env.city.rect.maxX) / 2, env.city.rect.maxZ + 60, '#ff7ab8', ls + 3],
-      ['SEA OF SAKURA', 3650, 1500, '#8fd3ff', ls + 2],
-      ['FESTIVAL SITE', 200, 330, '#ff7ab8', ls + 1],
-      ['FUJI PASS', -780, -640, '#ffffff', ls],
-      ['KISO FOREST', -2800, 300, '#b6ff3b', ls],
-      ['SUMMIT', -1650, -2950, '#ffffff', ls],
-      ['HORIZON HIGHWAY', 1000, 300, '#ffd23f', ls - 1],
-      ...(env.labels || []).map((l) => [l.text, l.x, l.z, '#ffe8a3', ls - 2]),
-    ];
+    // region names: big, letter-spaced and faint, like a printed map
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    if (M.zoom < 3.2) {
+      const rs = Math.min(30, 17 + M.zoom * 4);
+      ctx.font = `800 ${rs * dpr}px "Barlow Condensed", sans-serif`;
+      if ('letterSpacing' in ctx) ctx.letterSpacing = `${0.25 * rs * dpr}px`;
+      ctx.lineWidth = 5 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillStyle = 'rgba(255,255,255,0.78)';
+      for (const r of env.regions || []) {
+        const px = X(r.x), py = Y(r.z);
+        if (px < -200 || py < -50 || px > W + 200 || py > H + 50) continue;
+        const lines = r.name.split('\n');
+        lines.forEach((ln, k) => {
+          const ly = py + (k - (lines.length - 1) / 2) * rs * dpr * 1.05;
+          ctx.strokeText(ln, px, ly);
+          ctx.fillText(ln, px, ly);
+        });
+      }
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    }
+    const names = [
+      ['HORIZON FESTIVAL', 200, 330, '#ff7ab8', ls + 1],
+      ['C1', -1950, -1250, '#c9a6ff', ls],
+      ['PACIFIC OCEAN', -3600, 1900, '#8fd3ff', ls + 2],
+      ['TOKYO BAY', -3150, -1100, '#8fd3ff', ls],
+      ['HORIZON EXPRESSWAY', 1500, 1050, '#ffd23f', ls - 1],
+      ...(M.zoom > 2.2 && env.city?.tokyo ? [
+        ['SHIBUYA CROSSING', -1950, -240, '#ff7ab8', ls - 2], ['TOKYO TOWER', -2012, -690, '#ff9a5a', ls - 2],
+        ['GINKGO AVENUE', -1825, -900, '#ffd23f', ls - 2], ['DOCKYARDS', -2600, -250, '#ffffff', ls - 2],
+        ['INDUSTRIAL', -2000, -1210, '#ffffff', ls - 2], ['SUBURBS', -1450, 120, '#ffffff', ls - 2],
+      ] : []),
+      ...(env.labels || []).map((l) => [l.text, l.x, l.z, '#ffe8a3', ls - 2]),
+    ];
     ctx.lineWidth = 4 * dpr;
     ctx.strokeStyle = 'rgba(0,0,0,0.7)';
     for (const [text, x, z, color, size] of names) {

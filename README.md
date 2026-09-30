@@ -21,30 +21,29 @@ which takes a few seconds on a desktop GPU.
 
 ## What's in the game
 
-### An 8 km × 8 km open world
+### An 8 km × 8 km open world, laid out like Horizon Japan
+
+The map follows Forza Horizon 6's Japan layout, in miniature. Tokyo sits on
+the east coast, with Legend Island offshore. The centre has rice plains and
+the festival. The north rises into the snowy Alps.
 
 | Region | What's there |
 | --- | --- |
-| **Festival Site** | The Sakura festival hub: stages, Ferris wheel, lanterns and the Festival Loop circuit |
-| **Neon City** | A 1 km² downtown grid of glass towers, neon signs, billboards and traffic lights |
-| **Sea of Sakura coast** | Cliff roads, Sunset Beach with umbrellas, and an ocean with foam and depth colour |
-| **Minato Bay** | A harbour town with warehouses, a breakwater, a lighthouse (its beam sweeps at night) and moored boats |
-| **Sakura Village farmland** | Paddy and crop fields, dirt lanes and traditional minka farmhouses |
-| **Lake Sakura** | A lake loop with a vermilion bridge, a five-storey pagoda and a torii standing in the water |
-| **Wind farm downs** | Rolling hills with turning wind turbines and blinking beacons |
-| **Fuji Pass & the Summit** | A mountain pass and a 12 % hill-climb to a snowy observatory |
-| **Kiso Forest** | Gravel rally stages through dense pine forest |
-| **Airfield** | A 1.4 km runway with hangars, a control tower, runway lights and a launch ramp |
+| **Tokyo City** | Four districts:<br>• **Downtown:** towers, neon, a Shibuya-style scramble crossing with giant video screens, **Tokyo Tower** and golden **Ginkgo Avenue**<br>• **Dockyards:** container stacks, gantry cranes and a quay-side drag strip<br>• **Industrial:** storage tanks and striped chimneys<br>• **Suburbs:** low houses under tiled roofs<br>The elevated **C1 Loop** expressway circles downtown on concrete viaducts |
+| **Legend Island** | Offshore across the **Tokyo Bay Bridge**, a suspension bridge that leaves the C1. It has a circuit, a festival stage with screens, tents, a grandstand and sakura groves |
+| **Ito** | A fishing harbour town with a breakwater and lighthouse, beaches, and a cliff-top coast road south to Nangan |
+| **Ohtani** | The Horizon Festival hub (Ferris wheel, gantry, festival loop) and the Ohtani Pass hill road |
+| **Minamino** | Rice paddies and crop fields, farm lanes, hamlets, greenhouses, sheds and roadside vending machines |
+| **Hokubu** | A flat rice valley crossed by the elevated **Shinkansen**, with a bullet train running between Tokyo and a tunnel in the hills |
+| **Shimanoyama** | Highlands around the **Lake Haruna** crater lake: a lake loop, a five-storey pagoda, a torii in the water and the **Haruna touge** |
+| **Takashiro / Sotoyama** | The snowy Alps. The **Sotoyama Skyline** hairpins climb to a ski resort with lodges and moving chairlifts |
+| **Nangan** | Forested southern hills with a gravel rally trail |
 
-Roads are generated from spline centre-lines. The world includes:
-
-- automatic bridges and viaducts wherever a road crosses water or a valley
-- road profiles held to a grade limit and smoothed with vertical curves, so
-  crests don't launch you
-- banked cuttings and embankments that blend into the terrain
-- junctions and at-grade crossings resolved so every road meets its neighbours at the same height
-
-A snowy Fuji-style peak and distant ranges sit beyond the playable area.
+Across the countryside:
+- utility poles with sagging wires line the country roads
+- high-voltage pylon lines stride across the plains
+- small shrines sit at the edges of the hamlets
+- Mt. Fuji rises beyond the western ranges
 
 ### Physics
 
@@ -70,28 +69,30 @@ A snowy Fuji-style peak and distant ranges sit beyond the playable area.
 
 ### Events and activities
 
-- **14 events**, each started from a light-column beacon in the world
+- **18 events**, each started from a light-column beacon in the world
   (drive in and press `Enter`) or from the Festival tab:
-  - **Road races:** Sakura Circuit, Festival Sprint, Horizon Highway,
-    Coastal Circuit, Lakeside Loop
-  - **Street races:** Neon City, Minato Harbour GP
-  - **Mountain race:** Fuji Pass
-  - **Sprint:** Summit Hill Climb
-  - **Dirt race:** Kiso Forest Rally
-  - **Drag race:** Airfield Drag
-  - **Time trials:** Hanami, Neon Time Attack, Sakura Bridge
+  - **Expressway race:** C1 Loop
+  - **Road races:** Sakura Circuit, Festival Sprint, Legend Island Circuit,
+    Lake Haruna Loop, Horizon Expressway (13 km through every region)
+  - **Street races:** Tokyo Downtown, Ito Harbour GP
+  - **Mountain race:** Ohtani Pass
+  - **Sprints:** Haruna Touge, Sotoyama Skyline, Ito Coast
+  - **Dirt race:** Nangan Forest Rally
+  - **Drag race:** Dockyard Drag
+  - **Time trials:** Hanami, Tokyo Time Attack, C1 Time Attack, Haruna Lake
 - Races have up to 5 AI rivals that use the same physics. They include:
   - a live leaderboard with gaps
   - checkpoints and a wrong-way warning
   - results and payouts
   - three difficulty levels
-- **19 PR stunts around the map:** 8 speed traps, 4 speed zones, 4 drift
-  zones and 3 ramp jumps, each rated 1–3 stars.
+- **25 PR stunts around the map:** 11 speed traps, 5 speed zones, 5 drift
+  zones and 4 ramp jumps, each rated 1–3 stars.
 - **Skill chains:** drift, speed, air, cone smashes and clean driving build a
   multiplier. A crash breaks the chain.
 - **Progression:** credits, XP and levels. You can buy 5 cars and upgrade the
   engine, tyres and brakes. Everything is saved automatically.
-- **Traffic** drives the highway, the towns, the coast and the lake.
+- **Traffic** drives the expressways (including the C1), Tokyo, Ito, the
+  lake, the festival loop and Legend Island.
 
 ### Rendering
 
@@ -130,6 +131,7 @@ A snowy Fuji-style peak and distant ranges sit beyond the playable area.
   - hover tooltips
   - click an event to start it or set a GPS route to it
   - click anywhere to set a waypoint
+  - FH6-style region names
   - fast travel to 10 locations
 - **GPS:** shortest-path routing over the road network (Dijkstra), shown on
   the minimap with the distance remaining.
@@ -164,11 +166,15 @@ A snowy Fuji-style peak and distant ranges sit beyond the playable area.
     ├── main.js              Boot, frame loop, game states, quality presets, GPS, reflections
     ├── Environment.js       Assembles the world; festival site, ramps, stunts, backdrop, map image
     ├── world/
-    │   ├── Terrain.js       8 km height field: coast, lake, massif, farmland; road profiles,
+    │   ├── Terrain.js       8 km height field: east coast, Legend Island, Alps, crater lake,
+    │   │                    rice plains; road profiles, elevated expressways,
     │   │                    bridges, cuttings; LOD tiles; splat-mask ground shader
-    │   ├── Roads.js         Routes, connectors, junctions, road meshes, rails, lights, bridges
-    │   ├── City.js          Towns (downtown / harbour): streets, instanced buildings, signs
-    │   ├── Landmarks.js     Wind farm, pagoda, lighthouse, boats, village, observatory, airfield
+    │   ├── Roads.js         Routes, connectors, junctions, road meshes, rails, lights, bridges,
+    │   │                    C1 viaducts, suspension bridge
+    │   ├── City.js          Tokyo (districts, Tokyo Tower, scramble crossing, docks) and Ito
+    │   ├── Landmarks.js     Wind farm, pagoda + torii, Ito lighthouse and boats, ski resort, Legend stage
+    │   ├── Countryside.js   Hamlets, farm sheds, greenhouses, shrines, utility poles, pylons, Shinkansen
+    │   ├── Regions.js       The ten map regions (names, label positions, lookup)
     │   ├── Water.js         Ocean + lake shader (normals, depth colour, foam)
     │   ├── Vegetation.js    Procedural tree models, impostor atlas, rocks, GPU grass
     │   ├── Surfaces.js      Surface map (asphalt, gravel, sand, snow…) for tyre grip
