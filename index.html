@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Horizon Drive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,700;0,800;1,700;1,800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles/ui.css" />
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+        "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <!-- ============================== LOADING ============================== -->
+  <div id="loader" class="loader">
+    <div class="loader__brand">HORIZON<span>DRIVE</span></div>
+    <div class="loader__bar"><div id="loader-fill" class="loader__fill"></div></div>
+    <div id="loader-text" class="loader__text">Initialising physics…</div>
+  </div>
+
+  <!-- ================================ HUD ================================ -->
+  <div id="hud" class="hud">
+    <!-- Top-center: skill chain popups -->
+    <div class="skills">
+      <div id="skill-chain" class="skill-chain">
+        <div class="skill-chain__label">SKILL CHAIN</div>
+        <div class="skill-chain__row">
+          <span id="skill-chain-score" class="skill-chain__score">0</span>
+          <span id="skill-chain-mult" class="skill-chain__mult">x1</span>
+        </div>
+        <div class="skill-chain__timer"><div id="skill-chain-timer"></div></div>
+      </div>
+      <div id="skill-feed" class="skill-feed"></div>
+    </div>
+
+    <!-- Top-left: track banner -->
+    <div class="banner">
+      <div class="banner__logo">HORIZON<b>SAKURA</b></div>
+      <div id="banner-sub" class="banner__sub">Free Roam · Festival Loop</div>
+    </div>
+
+    <!-- Top-right: total score -->
+    <div class="score-box">
+      <div class="score-box__label">SKILL SCORE</div>
+      <div id="total-score" class="score-box__value">0</div>
+    </div>
+
+    <!-- Bottom-left: minimap -->
+    <div class="minimap">
+      <canvas id="minimap-canvas" width="320" height="320"></canvas>
+      <div class="minimap__ring"></div>
+      <div class="minimap__north">N</div>
+      <div class="minimap__hint"><kbd>ESC</kbd> MENU <kbd>C</kbd> CAMERA <kbd>R</kbd> RESET</div>
+    </div>
+
+    <!-- Bottom-right: tachometer / speedo -->
+    <div class="tacho">
+      <svg class="tacho__svg" viewBox="0 0 200 200" aria-hidden="true">
+        <defs>
+          <linearGradient id="rpm-grad" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0%" stop-color="#43f0ff" />
+            <stop offset="65%" stop-color="#ffffff" />
+            <stop offset="100%" stop-color="#ff2d8f" />
+          </linearGradient>
+        </defs>
+        <circle class="tacho__track" cx="100" cy="100" r="84" />
+        <circle class="tacho__redline" cx="100" cy="100" r="84" />
+        <circle id="tacho-arc" class="tacho__arc" cx="100" cy="100" r="84" />
+        <g id="tacho-ticks"></g>
+      </svg>
+      <div class="tacho__gear-wrap">
+        <div id="gear" class="tacho__gear">N</div>
+      </div>
+      <div class="tacho__speed">
+        <span id="speed" class="tacho__speed-value">000</span>
+        <span id="speed-unit" class="tacho__speed-unit">MPH</span>
+      </div>
+      <div id="rpm-readout" class="tacho__rpm">0 RPM</div>
+      <div id="handbrake-light" class="tacho__hb">HANDBRAKE</div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <!-- ================================ MENU =============================== -->
+  <div id="menu" class="menu" aria-hidden="true">
+    <header class="menu__top">
+      <div class="menu__profile">
+        <div class="menu__avatar">HD</div>
+        <div>
+          <div class="menu__name">Driver</div>
+          <div class="menu__credits">CR <span id="menu-credits">0</span></div>
+        </div>
+      </div>
+      <nav class="menu__tabs" role="tablist">
+        <span class="menu__bumper">LB</span>
+        <button class="menu__tab is-active" data-tab="festival" role="tab">FESTIVAL</button>
+        <button class="menu__tab" data-tab="garage" role="tab">GARAGE</button>
+        <button class="menu__tab" data-tab="map" role="tab">MAP</button>
+        <button class="menu__tab" data-tab="settings" role="tab">SETTINGS</button>
+        <span class="menu__bumper">RB</span>
+      </nav>
+      <div id="menu-car" class="menu__car">
+        <div class="menu__car-class">A 800</div>
+        <div id="menu-car-name" class="menu__car-name">Sakura GT</div>
+      </div>
+    </header>
+
+    <!-- FESTIVAL -->
+    <section class="menu__panel is-active" data-panel="festival">
+      <div class="grid grid--festival">
+        <button class="card card--hero card--pink" data-action="resume">
+          <div class="card__art card__art--road"></div>
+          <div class="card__title">Resume<br />Drive</div>
+          <div class="card__sub">Back to the Festival Loop</div>
+        </button>
+        <button class="card card--cyan" data-action="reset">
+          <div class="card__icon">⟲</div>
+          <div class="card__title">Reset Car</div>
+          <div class="card__sub">Return to the start grid</div>
+        </button>
+        <button class="card card--yellow" data-action="time-golden">
+          <div class="card__icon">☀</div>
+          <div class="card__title">Golden Hour</div>
+          <div class="card__sub">Low sun, long shadows</div>
+        </button>
+        <button class="card card--lime" data-action="time-noon">
+          <div class="card__icon">◎</div>
+          <div class="card__title">Midday</div>
+          <div class="card__sub">Clear spring sky</div>
+        </button>
+        <div class="card card--stats">
+          <div class="card__title">Skill Stats</div>
+          <dl class="stats">
+            <dt>Total score</dt><dd id="stat-total">0</dd>
+            <dt>Best chain</dt><dd id="stat-best">0</dd>
+            <dt>Longest drift</dt><dd id="stat-drift">0 m</dd>
+            <dt>Top speed</dt><dd id="stat-top">0</dd>
+          </dl>
+        </div>
+        <button class="card card--violet" data-action="camera">
+          <div class="card__icon">◉</div>
+          <div class="card__title">Camera</div>
+          <div class="card__sub" id="camera-label">Close Chase</div>
+        </button>
+      </div>
+    </section>
+
+    <!-- GARAGE -->
+    <section class="menu__panel" data-panel="garage">
+      <div class="grid grid--garage" id="garage-cars"></div>
+      <div class="paint">
+        <div class="paint__label">PAINT</div>
+        <div class="paint__swatches" id="paint-swatches"></div>
+      </div>
+    </section>
+
+    <!-- MAP -->
+    <section class="menu__panel" data-panel="map">
+      <div class="map-wrap">
+        <canvas id="world-map" width="900" height="600"></canvas>
+        <div class="map-legend">
+          <span><i class="dot dot--player"></i> You</span>
+          <span><i class="dot dot--road"></i> Festival Loop</span>
+          <span><i class="dot dot--cone"></i> Cones</span>
+          <span><i class="dot dot--tree"></i> Sakura Grove</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="menu__panel" data-panel="settings">
+      <div class="grid grid--settings">
+        <label class="card card--setting">
+          <div class="card__title">Speed Units</div>
+          <select id="set-units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Bloom</div>
+          <input type="checkbox" id="set-bloom" checked />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Speed Blur</div>
+          <input type="checkbox" id="set-blur" checked />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Shadows</div>
+          <select id="set-shadows"><option value="2048">High</option><option value="1024">Medium</option><option value="0">Off</option></select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Time of Day</div>
+          <input type="range" id="set-time" min="4" max="60" value="38" />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Resolution Scale</div>
+          <select id="set-res"><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select>
+        </label>
+        <div class="card card--setting card--controls">
+          <div class="card__title">Controls</div>
+          <ul class="controls">
+            <li><kbd>W</kbd>/<kbd>↑</kbd> Throttle</li>
+            <li><kbd>S</kbd>/<kbd>↓</kbd> Brake / Reverse</li>
+            <li><kbd>A D</kbd>/<kbd>← →</kbd> Steer</li>
+            <li><kbd>Space</kbd> Handbrake</li>
+            <li><kbd>C</kbd> Camera · <kbd>R</kbd> Reset</li>
+            <li>Gamepad: RT/LT, L-Stick, A handbrake, Start menu</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer class="menu__footer">
+      <span><kbd>ESC</kbd> / <kbd>Start</kbd> Close</span>
+      <span><kbd>Q</kbd> <kbd>E</kbd> / <kbd>LB</kbd> <kbd>RB</kbd> Switch tab</span>
+      <span id="physics-backend">Physics: —</span>
+    </footer>
+  </div>
+
+  <div id="fatal" class="fatal" hidden></div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
