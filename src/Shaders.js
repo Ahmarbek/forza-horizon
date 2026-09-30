@@ -316,16 +316,18 @@ export const SpeedBlurShader = {
 };
 
 /**
- * Keep every built-in material's output below the half-float limit (65504).
- * A mirror-smooth sun glint (water, clear coat) can exceed it; written to an
- * HDR target it becomes +Inf, and the reflection probe's prefilter turns that
- * into NaN that then spreads through the car paint and bloom.
+ * Cap every built-in material's HDR output. A mirror-smooth sun glint (water,
+ * clear coat) can exceed the half-float limit; written to an HDR target it
+ * becomes +Inf, the reflection probe's prefilter turns that into NaN, and bloom
+ * spreads it over the frame. Even finite, a few pixels in the tens of
+ * thousands wash the whole screen out through bloom's widest mips. After
+ * exposure and ACES anything above ~10 is white already.
  */
 let radianceClamped = false;
 export function installRadianceClamp() {
   if (radianceClamped) return;
   radianceClamped = true;
-  THREE.ShaderChunk.opaque_fragment += '\ngl_FragColor.rgb = min(gl_FragColor.rgb, vec3(30000.0));\n';
+  THREE.ShaderChunk.opaque_fragment += '\ngl_FragColor.rgb = min(gl_FragColor.rgb, vec3(64.0));\n';
 }
 
 /**
@@ -348,7 +350,7 @@ export const SanitizeShader = {
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
       // NaN → black; ±Inf and huge highlights → a bright but finite value
-      gl_FragColor = any(isnan(c)) ? vec4(0.0, 0.0, 0.0, 1.0) : clamp(c, 0.0, 2000.0);
+      gl_FragColor = any(isnan(c)) ? vec4(0.0, 0.0, 0.0, 1.0) : clamp(c, 0.0, 64.0);
     }
   `,
 };

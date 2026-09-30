@@ -1374,7 +1374,7 @@ body.is-touch .skills { top: 70px; }
 .map-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 .map-side .fast-travel { position: static; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .map-side .fast-travel__label { grid-column: 1 / -1; }
-.map-side .fast-travel .btn--small { padding: 4px 8px; font-size: 14px; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-side .fast-travel .btn--small { padding: 4px 8px; font-size: 13px; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .map-side .fast-travel .btn--small:last-child:nth-child(even) { grid-column: 1 / -1; }
 .map-info {
   padding: 12px 14px;
