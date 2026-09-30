@@ -818,7 +818,8 @@ export class Terrain {
             float oB = 1.0 - smoothstep(0.12, 0.4, fpx * 3.1);
             float fine = 0.5 + (tnoise(p * 0.9) - 0.5) * 0.6 * oA + (tnoise(p * 3.1) - 0.5) * 0.4 * oB;
             col *= 0.86 + 0.24 * fine;
-            gBump = mix(grassT.a, rockT.a, rockW) * (1.0 - snowW) * (1.0 - mask.g) * (1.0 - sandW * 0.5);
+            // rock only: the grass texture is too fine to bump without sparkling
+            gBump = rockT.a * rockW * (1.0 - snowW) * (1.0 - mask.g);
             gTerrainRough = mix(mix(0.95, 0.82, rockW), 0.5, snowW);
             gTerrainRough = mix(gTerrainRough, 0.12, gTerrainWet);
             diffuseColor.rgb *= col;
@@ -848,7 +849,10 @@ export class Terrain {
             vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
             float det = dot(dpx, r1);
             vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
-            vec3 nb = abs(det) * normal - grad * 0.9 * fadeB * (1.0 - gTerrainWet);
+            // only while texels are bigger than pixels: once mip-mapping brings the texture to pixel
+            // scale, screen-space height differences are just per-quad noise (sparkle)
+            float fadeD = 1.0 - smoothstep(0.012, 0.05, fpx);
+            vec3 nb = abs(det) * normal - grad * 0.9 * fadeD * (1.0 - gTerrainWet);
             if (dot(nb, nb) > 1e-24) normal = normalize(nb);
           }`);
     };

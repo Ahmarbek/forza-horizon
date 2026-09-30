@@ -746,7 +746,8 @@ export class Vegetation {
       uLake: { value: LAKE.level },
     };
     const u = this.grassUniforms;
-    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    // standard (not Lambert) so blades get the same sky irradiance as the terrain under them
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
       sh.vertexShader = sh.vertexShader
