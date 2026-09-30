@@ -4,7 +4,7 @@ import { Environment } from './Environment.js';
 import { Vehicle, InputController, CAR_PRESETS, preloadCarModels } from './Vehicle.js';
 import { CameraController } from './CameraController.js';
 import { UI } from './UI.js';
-import { createPostProcessing } from './Shaders.js';
+import { createPostProcessing, installRadianceClamp } from './Shaders.js';
 import { AudioSystem } from './Audio.js';
 import { Progression } from './Progression.js';
 import { EventManager, StuntManager, AmbientTraffic, EventBeacons, EVENTS, EVENT_KIND_LABEL } from './Events.js';
@@ -217,6 +217,7 @@ class App {
 
     // ------------------------------------------------------------- World
     const carModels = preloadCarModels();
+    installRadianceClamp();
     this.env = new Environment(this.scene, this.physics, r);
     await this.env.build(async (frac, text) => {
       this.ui.setLoading(frac, text);

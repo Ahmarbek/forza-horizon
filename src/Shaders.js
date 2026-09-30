@@ -316,6 +316,19 @@ export const SpeedBlurShader = {
 };
 
 /**
+ * Keep every built-in material's output below the half-float limit (65504).
+ * A mirror-smooth sun glint (water, clear coat) can exceed it; written to an
+ * HDR target it becomes +Inf, and the reflection probe's prefilter turns that
+ * into NaN that then spreads through the car paint and bloom.
+ */
+let radianceClamped = false;
+export function installRadianceClamp() {
+  if (radianceClamped) return;
+  radianceClamped = true;
+  THREE.ShaderChunk.opaque_fragment += '\ngl_FragColor.rgb = min(gl_FragColor.rgb, vec3(30000.0));\n';
+}
+
+/**
  * Replaces NaN / Inf pixels (and clamps extreme HDR values) before bloom.
  * Bloom's wide mip chain would otherwise smear a single bad pixel from a
  * specular highlight into a black screen.
