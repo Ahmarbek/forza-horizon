@@ -25,6 +25,7 @@ const DEFAULT = () => ({
   settings: {
     units: 'mph', bloom: true, blur: true, shadows: 2048, time: 38, resolution: 1,
     master: 0.8, music: 0.35, sfx: 0.8, radio: true, difficulty: 'normal', grass: 'high', traffic: 1,
+    abs: true, tcs: true, stm: true, steerAssist: true, transmission: 'auto', quality: 'high', trees: 'high',
   },
 });
 

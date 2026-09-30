@@ -57,6 +57,10 @@ export class PhysicsWorld {
     this._ray = null; // Rapier Ray (reused)
     this._rayGroups = interactionGroups(GROUPS.WHEELS, GROUPS.STATIC_GEOMETRY);
     this.props = []; // dynamic props { body, index }
+    this._terrainHandle = -1;
+    /** Optional hooks set by the world: surface under a wheel, ground height. */
+    this.surfaceAt = null;
+    this.groundHeight = null;
   }
 
   get supportsDynamicProps() {
@@ -91,7 +95,7 @@ export class PhysicsWorld {
       const desc = R.ColliderDesc.cuboid(halfSize, 0.5, halfSize)
         .setFriction(1.0)
         .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
-      this.world.createCollider(desc, body);
+      this._terrainHandle = this.world.createCollider(desc, body).handle;
     } else {
       this.lite.groundY = 0;
     }
@@ -108,7 +112,7 @@ export class PhysicsWorld {
       const desc = R.ColliderDesc.heightfield(segments, segments, heights, { x: size, y: 1, z: size })
         .setFriction(1.0)
         .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
-      this.world.createCollider(desc, body);
+      this._terrainHandle = this.world.createCollider(desc, body).handle;
     } else {
       this.lite.terrain = terrain;
     }
@@ -211,15 +215,17 @@ export class PhysicsWorld {
         R.RigidBodyDesc.dynamic()
           .setTranslation(position.x, position.y, position.z)
           .setRotation({ x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w })
-          .setLinearDamping(0.02)
-          .setAngularDamping(0.6)
+          .setLinearDamping(0)
+          .setAngularDamping(0.15)
           .setCcdEnabled(true)
           .setCanSleep(false)
       );
-      const desc = R.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+      // rounded box: glances off walls and other cars instead of snagging on edges
+      const rad = 0.12;
+      const desc = R.ColliderDesc.roundCuboid(halfExtents.x - rad, halfExtents.y - rad, halfExtents.z - rad, rad)
         .setMassProperties(mass, centerOfMass, inertia, { x: 0, y: 0, z: 0, w: 1 })
-        .setFriction(0.3)
-        .setRestitution(0.05)
+        .setFriction(0.2)
+        .setRestitution(0.08)
         .setCollisionGroups(
           interactionGroups(GROUPS.VEHICLE_BODY, GROUPS.STATIC_GEOMETRY | GROUPS.PROPS | GROUPS.VEHICLE_BODY)
         );
@@ -268,6 +274,7 @@ export class PhysicsWorld {
       if (hit) {
         const toi = hit.timeOfImpact ?? hit.toi;
         out.hit = true;
+        out.terrain = hit.collider ? hit.collider.handle === this._terrainHandle : true;
         out.distance = toi;
         out.normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
         out.point.copy(dir).multiplyScalar(toi).add(origin);
@@ -317,8 +324,8 @@ class LiteBody {
     this.invMass = 1 / mass;
     this.invInertiaLocal = new THREE.Vector3(1 / inertia.x, 1 / inertia.y, 1 / inertia.z);
     this.invInertiaWorld = new THREE.Matrix3();
-    this.linDamp = 0.02;
-    this.angDamp = 0.6;
+    this.linDamp = 0;
+    this.angDamp = 0.15;
     this._t = { x: 0, y: 0, z: 0 };
     this._r = { x: 0, y: 0, z: 0, w: 1 };
     this._lv = { x: 0, y: 0, z: 0 };
@@ -483,6 +490,7 @@ class LiteSolver {
       if (t >= 0 && t < best) {
         best = t;
         out.hit = true;
+        out.terrain = true;
         this.heightAt(origin.x + dir.x * t, origin.z + dir.z * t, out.normal);
       }
     }
@@ -513,6 +521,7 @@ class LiteSolver {
       if (!miss && axis >= 0 && tmin < best) {
         best = tmin;
         out.hit = true;
+        out.terrain = false;
         // local normal -> world
         const n = [0, 0, 0];
         n[axis] = sign;

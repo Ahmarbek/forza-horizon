@@ -221,6 +221,7 @@ class App {
     this.input.touch = this.ui.touch;
     this.vehicle = new Vehicle(this.scene, this.physics, this.progression.selectedPreset);
     this.vehicle.setPaint(this.progression.selectedPaint);
+    this.applyDrivingAids();
     this.vehicle.reset(this.env.startPosition, this.env.startYaw);
 
     this.cameraCtl = new CameraController(this.camera, {
@@ -543,9 +544,24 @@ class App {
     }
   }
 
+  /** Driver aids & gearbox from settings → player car. */
+  applyDrivingAids() {
+    const s = this.progression.settings;
+    const v = this.vehicle;
+    Object.assign(v.assists, { abs: s.abs, tcs: s.tcs, stm: s.stm, steer: s.steerAssist });
+    v.manual = s.transmission === 'manual';
+  }
+
   onSetting(key, value) {
     this.progression.setSetting(key, value);
     switch (key) {
+      case 'abs':
+      case 'tcs':
+      case 'stm':
+      case 'steerAssist':
+      case 'transmission':
+        this.applyDrivingAids();
+        break;
       case 'units':
         this.ui.setUnits(value);
         this.ui.updateStats(this.progression, this.skills.stats);
@@ -637,10 +653,10 @@ class App {
         if (state === STATE.MENU) this.closeMenu();
         else this.onMenuAction('results-continue');
       }
-      input.consume('camera');
-      input.consume('reset');
+      for (const a of ['camera', 'reset', 'shiftUp', 'shiftDown', 'interact', 'map']) input.consume(a);
     } else {
       for (const a of ['tabLeft', 'tabRight', 'navUp', 'navDown', 'navLeft', 'navRight', 'confirm', 'back']) input.consume(a);
+      if (state !== STATE.GAMEPLAY) for (const a of ['shiftUp', 'shiftDown', 'interact', 'map']) input.consume(a);
       if (state === STATE.GAMEPLAY) {
         if (input.consume('camera')) {
           const name = this.cameraCtl.cycleChaseMode();
@@ -648,6 +664,8 @@ class App {
           this.ui.toast(`Camera: ${name}`);
         }
         if (input.consume('reset') && !this.events.freezePlayer) this.resetCar();
+        if (input.consume('shiftUp') && this.vehicle.manual) this.vehicle.shift(1);
+        if (input.consume('shiftDown') && this.vehicle.manual) this.vehicle.shift(-1);
       }
     }
 

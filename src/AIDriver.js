@@ -79,9 +79,7 @@ export class AIDriver {
     route.point(this.idx + look / spacing, this.lane, _tgt);
     _d.subVectors(_tgt, pos).setY(0);
     const ang = Math.atan2(_d.dot(_left), _d.dot(_fwd));
-    const sf = 1 / (1 + speed * 0.05);
-    const maxSteer = v.preset.maxSteer;
-    inp.steer = THREE.MathUtils.clamp((ang * 1.25) / (maxSteer * sf), -1, 1);
+    inp.steer = THREE.MathUtils.clamp((ang * 1.25) / v.steerLimit(speed), -1, 1);
 
     // --- Speed planning from curvature ahead
     const decel = 8.5 * this.skill;

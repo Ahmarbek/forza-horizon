@@ -47,11 +47,15 @@ export class Environment {
   /** Heavy: builds everything. `progress(frac, label)` is awaited between steps. */
   async build(progress = async () => {}) {
     const { scene, physics, renderer } = this;
+    const timings = [];
+    let t0 = performance.now();
+    const mark = (label) => { const t = performance.now(); timings.push(`${label} ${Math.round(t - t0)}ms`); t0 = t; };
+    const step = async (frac, text) => { mark(text); await progress(frac, text); t0 = performance.now(); };
 
-    await progress(0.22, 'Painting the sky…');
+    await step(0.22, 'Painting the sky…');
     this.atmo = new Atmosphere(scene, renderer);
 
-    await progress(0.3, 'Shaping 16 km² of terrain…');
+    await step(0.3, 'Shaping 16 km² of terrain…');
     const terrain = new Terrain();
     this.terrain = terrain;
     terrain.addFlatRect(FESTIVAL_ZONE.minX, FESTIVAL_ZONE.minZ, FESTIVAL_ZONE.maxX, FESTIVAL_ZONE.maxZ, 170);
@@ -66,16 +70,16 @@ export class Environment {
     scene.add(terrain.createMesh());
     physics.addHeightfield(terrain.seg, terrain.physicsHeights(), terrain.size, terrain);
 
-    await progress(0.42, 'Paving 20 km of road…');
+    await step(0.42, 'Paving 20 km of road…');
     roads.build();
     this.instanceCount += roads.instanceCount;
     this._setStarts();
 
-    await progress(0.52, 'Raising Neon City…');
+    await step(0.52, 'Raising Neon City…');
     this.city = new City(scene, physics, renderer).build(roads.textures);
     this.instanceCount += this.city.instanceCount;
 
-    await progress(0.6, 'Setting up the festival…');
+    await step(0.6, 'Setting up the festival…');
     this._buildPlaza();
     this._buildGantry();
     this._buildRamps();
@@ -85,7 +89,7 @@ export class Environment {
     this._buildBackdrop();
     this._buildPetals();
 
-    await progress(0.7, 'Growing forests and sakura groves…');
+    await step(0.7, 'Growing forests and sakura groves…');
     this.veg = new Vegetation(scene, physics, terrain);
     const fest = this.routes.festival;
     const sakuraRows = [];
@@ -108,6 +112,8 @@ export class Environment {
     this.treePositions = this.veg.treePositions;
 
     this.setTimeOfDay(38);
+    mark('finish');
+    console.info('[Environment] build timings: ' + timings.join(' · '));
     return this;
   }
 

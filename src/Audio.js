@@ -174,6 +174,17 @@ export class AudioSystem {
     src.connect(lp).connect(this.windGain).connect(this.sfxBus);
     this.windLp = lp;
     src.start();
+    // gravel / grass rumble: low band-passed noise with a slow tremolo
+    const g2 = this._noiseSource();
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 420;
+    bp.Q.value = 0.9;
+    this.gravelGain = c.createGain();
+    this.gravelGain.gain.value = 0;
+    g2.connect(bp).connect(this.gravelGain).connect(this.sfxBus);
+    this.gravelBp = bp;
+    g2.start();
   }
 
   // -------------------------------------------------------------- Update
@@ -190,13 +201,19 @@ export class AudioSystem {
     for (let i = 0; i < this.engOsc.length; i++) this.engOsc[i].frequency.setTargetAtTime(base, t, 0.03);
     this.engLfo.frequency.setTargetAtTime(base / 2, t, 0.03);
     this.engFilter.frequency.setTargetAtTime(350 + throttle * 2600 + rpm * 0.25, t, 0.05);
-    const rpmN = Math.min(1, rpm / 8200);
+    const rpmN = Math.min(1, rpm / (v.drive?.redline ?? 8200));
     this.engineOut.gain.setTargetAtTime((active ? 0.09 : 0.05) + throttle * 0.1 + rpmN * 0.07, t, 0.06);
 
     const speed = v.speedAbs;
     const skid = active ? v.skid * Math.min(1, speed / 6) : 0;
     this.tyreGain.gain.setTargetAtTime(skid * 0.28, t, 0.05);
     this.tyreBp.frequency.setTargetAtTime(1700 + skid * 900, t, 0.1);
+
+    if (this.gravelGain) {
+      const gr = active ? (v.gravel || 0) : 0;
+      this.gravelGain.gain.setTargetAtTime(gr * 0.3, t, 0.08);
+      this.gravelBp.frequency.setTargetAtTime(260 + gr * 500 + (v.rough || 0) * 200, t, 0.1);
+    }
 
     const w = active ? Math.min(1, speed / 80) : 0;
     this.windGain.gain.setTargetAtTime(w * w * 0.35, t, 0.2);
