@@ -214,7 +214,7 @@ export function createRoutes() {
     city: new Route({
       id: 'city', name: 'Tokyo Street Circuit', width: CITY_STREET_WIDTH, type: 'street', render: false, carves: false, flat: true,
       rounded: 13,
-      points: [[-1575, -1175], [-1575, -300], [-1950, -300], [-1950, 50], [-2450, 50], [-2450, -800], [-2075, -800], [-2075, -1175]],
+      points: [[-1575, -1175], [-1575, -300], [-1950, -300], [-1950, 75], [-2450, 75], [-2450, -800], [-2075, -800], [-2075, -1175]],
     }),
     // C1-style inner loop: elevated over the block mid-lines of downtown Tokyo
     c1: new Route({
@@ -284,7 +284,7 @@ export function createRoutes() {
     // Tokyo access (ground streets meet the city at its west edge)
     new Route({ id: 'c-hwy-tokyo-n', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1076, -300], [-1200, -300], [-1325, -300]] }),
     new Route({ id: 'c-hwy-tokyo-s', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1072, -1175], [-1200, -1175], [-1325, -1175]] }),
-    new Route({ id: 'c-hwy-tokyo-w', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1080, 50], [-1200, 50], [-1325, 50]] }),
+    new Route({ id: 'c-hwy-tokyo-w', closed: false, width: 12, type: 'country', lamps: 'pole', points: [[-1080, 75], [-1200, 75], [-1325, 75]] }),
     // expressway link: C1 west side → down to the Horizon Expressway
     new Route({
       id: 'c-c1-link', name: 'Shuto Link', closed: false, width: 14, type: 'highway', elevated: true, startElevated: true,
@@ -314,10 +314,10 @@ export function createRoutes() {
     new Route({ id: 'c-wangan', name: 'Wangan Coast Road', closed: false, width: 12, type: 'country', rails: 'seaward', lamps: 'pole', lampSpacing: 80, points: [[-2325, 200], [-2450, 500], [-2560, 900], [-2520, 1300], [-2300, 1700], [-1900, 1950], [-1300, 1900]] }),
     new Route({ id: 'c-hokubu-ew', name: 'Hokubu Farm Road', closed: false, width: 9, type: 'country', points: [[-1300, 1900], [-600, 1850], [0, 1800], [600, 1820], [1050, 1800]] }),
     new Route({ id: 'c-ohtani-north', name: 'Hokubu Valley Road', closed: false, width: 10, type: 'country', points: [[-420, 1060], [-380, 1300], [-330, 1600], [-300, 1850], [-300, 2280]] }),
-    new Route({ id: 'c-mtn-hwy', closed: false, width: 11, type: 'country', points: [[-840, 760], [-1000, 720], [-1146, 700]] }),
-    new Route({ id: 'c-hokubu-lake', name: 'Shimanoyama Climb', closed: false, width: 10, type: 'country', rails: 'curves', maxGrade: 0.13, smooth: 45, points: [[1050, 1800], [1250, 1950], [1350, 1780], [1500, 1900], [1640, 1720]] }),
+    new Route({ id: 'c-mtn-hwy', closed: false, width: 11, type: 'country', points: [[-840, 760], [-950, 860], [-1030, 760], [-1000, 640], [-1149, 640]] }),
+    new Route({ id: 'c-hokubu-lake', name: 'Shimanoyama Climb', closed: false, width: 10, type: 'country', rails: 'curves', maxGrade: 0.13, smooth: 45, points: [[1050, 1800], [1200, 1950], [1330, 1760], [1200, 1600], [1380, 1480], [1500, 1650], [1560, 1718], [1618, 1722]] }),
     // south
-    new Route({ id: 'c-hwy-rally', name: 'Nangan Forest Road', closed: false, width: 9, type: 'country', points: [[200, -2250], [150, -2400], [100, -2550]] }),
+    new Route({ id: 'c-hwy-rally', name: 'Nangan Forest Road', closed: false, width: 9, type: 'country', points: [[200, -2250], [360, -2320], [250, -2420], [60, -2440], [100, -2550]] }),
     new Route({ id: 'c-minamino-ns', name: 'Paddy Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[1500, -440], [1550, -1000], [1450, -1500], [1300, -1900], [1300, -2350]] }),
     new Route({ id: 'c-minamino-west', name: 'Minamino Village Lane', closed: false, width: 7, type: 'dirt', smooth: 40, points: [[800, -300], [900, -800], [1100, -1250], [1450, -1500]] }),
   ];
