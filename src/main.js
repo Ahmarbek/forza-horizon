@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { PhysicsWorld } from './PhysicsWorld.js';
 import { Environment } from './Environment.js';
-import { Vehicle, InputController, CAR_PRESETS } from './Vehicle.js';
+import { Vehicle, InputController, CAR_PRESETS, preloadCarModels } from './Vehicle.js';
 import { CameraController } from './CameraController.js';
 import { UI } from './UI.js';
-import { createPostProcessing, createSkyMaterial } from './Shaders.js';
+import { createPostProcessing } from './Shaders.js';
 import { AudioSystem } from './Audio.js';
 import { Progression } from './Progression.js';
 import { EventManager, StuntManager, AmbientTraffic, EVENTS } from './Events.js';
@@ -21,7 +21,7 @@ export const STATE = Object.freeze({
   LOADING: 'LOADING', TITLE: 'TITLE', GAMEPLAY: 'GAMEPLAY', MENU: 'MENU', RESULTS: 'RESULTS',
 });
 
-const FROZEN_INPUT = Object.freeze({ throttle: 0, brake: 1, steer: 0, handbrake: true });
+const FROZEN_INPUT = Object.freeze({ throttle: 0, brake: 0, steer: 0, handbrake: true });
 const IDLE_INPUT = Object.freeze({ throttle: 0, brake: 0.4, steer: 0, handbrake: false });
 
 // ============================================================================
@@ -167,8 +167,6 @@ class App {
     this.clock = new THREE.Clock();
     this.resolutionScale = 1;
     this.frame = 0;
-    this._envDirty = false;
-    this._envTimer = 0;
     this._saveTimer = 0;
   }
 
@@ -210,11 +208,14 @@ class App {
     this.ui.setBackend(backend);
 
     // ------------------------------------------------------------- World
-    this.ui.setLoading(0.35, 'Building the Festival Loop…');
-    await nextFrame();
-    this.env = new Environment(this.scene, this.physics, r).build();
-    this.ui.setLoading(0.7, 'Preparing the garage…');
-    await nextFrame();
+    const carModels = preloadCarModels();
+    this.env = new Environment(this.scene, this.physics, r);
+    await this.env.build(async (frac, text) => {
+      this.ui.setLoading(frac, text);
+      await nextFrame();
+    });
+    this.ui.setLoading(0.8, 'Loading cars from the garage…');
+    await Promise.race([carModels, new Promise((res) => setTimeout(res, 8000))]);
 
     this.input = new InputController();
     this.input.touch = this.ui.touch;
@@ -222,7 +223,10 @@ class App {
     this.vehicle.setPaint(this.progression.selectedPaint);
     this.vehicle.reset(this.env.startPosition, this.env.startYaw);
 
-    this.cameraCtl = new CameraController(this.camera);
+    this.cameraCtl = new CameraController(this.camera, {
+      physics: this.physics,
+      heightAt: (x, z) => this.env.heightAt(x, z),
+    });
     this.cameraCtl.snap(this.vehicle);
 
     // ------------------------------------------------ Game systems
@@ -237,7 +241,7 @@ class App {
     this.events = new EventManager(ctx);
     this.stunts = new StuntManager(ctx);
     this.traffic = new AmbientTraffic(ctx);
-    this.traffic.spawn(4, this.vehicle.root.position);
+    this.spawnTraffic();
 
     this.progression.onChange((type, payload) => {
       if (type === 'levelup') {
@@ -250,14 +254,9 @@ class App {
     this.ui.updateProfile(this.progression);
 
     // ----------------------------------------------- Env map + post FX
-    this.ui.setLoading(0.85, 'Lighting…');
-    this.pmrem = new THREE.PMREMGenerator(r);
-    this.envScene = new THREE.Scene();
-    this.envSky = new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), createSkyMaterial());
-    this.envScene.add(this.envSky);
-    this.env.setTimeOfDay(settings.time);
-    this._updateEnvMap();
-    this.scene.environmentIntensity = 0.7;
+    this.ui.setLoading(0.88, 'Lighting…');
+    this.setTime(settings.time);
+    this.env.veg.setGrassDensity(settings.grass);
 
     this.post = createPostProcessing(r, this.scene, this.camera);
     this.post.bloomPass.enabled = settings.bloom;
@@ -346,17 +345,29 @@ class App {
     this.clock.getDelta();
   }
 
+  spawnTraffic() {
+    const scale = this.progression.settings.traffic ?? 1;
+    if (scale > 0) this.traffic.spawn(scale, this.vehicle.root.position);
+    else this.traffic.despawn();
+    this.traffic.setHeadlights(this.env.lampLevel ?? 0);
+  }
+
   resetCar() {
     const v = this.vehicle;
     const p = v.root.position;
     const env = this.env;
     if (env.inPlaza(p.x, p.z) && !this.events.active) {
       v.reset(env.startPosition, env.startYaw);
+    } else if (this.events.active) {
+      const route = this.events.route;
+      const i = route.nearestIndex(p.x, p.z);
+      const pos = route.point(i, 0, new THREE.Vector3());
+      pos.y += 1.2;
+      v.reset(pos, route.yaw(i));
     } else {
-      const i = env.nearestIndex(p.x, p.z);
-      const pos = env.trackPoint(i, 0, new THREE.Vector3());
-      pos.y = 1.2;
-      v.reset(pos, env.trackYaw(i));
+      const n = env.nearestRoad(p.x, p.z);
+      n.point.y = env.heightAt(n.point.x, n.point.z) + 1.2;
+      v.reset(n.point, n.yaw);
     }
     this.cameraCtl.snap(v);
     this.skills.reset();
@@ -381,7 +392,7 @@ class App {
 
   endEvent() {
     this.events.cleanup();
-    this.traffic.spawn(4, this.vehicle.root.position);
+    this.spawnTraffic();
     this.stunts.enabled = true;
     this.stunts.reset();
     this.ui.hideResults();
@@ -421,6 +432,25 @@ class App {
         this.setTime(9);
         this.ui.toast('Golden hour');
         break;
+      case 'time-night':
+        this.setTime(-12);
+        this.ui.toast('Night');
+        break;
+      case 'travel': {
+        if (this.events.active) { this.ui.toast('Finish or quit the event first'); break; }
+        const route = this.env.routes[data];
+        const i = route.startIndex - Math.round(40 / route.spacing);
+        const pos = route.point(i, data === 'highway' ? -4.4 : 0, new THREE.Vector3());
+        pos.y += 1.2;
+        this.vehicle.reset(pos, route.yaw(i));
+        this.cameraCtl.snap(this.vehicle);
+        this.stunts.reset();
+        this.skills.reset();
+        this.spawnTraffic();
+        this.closeMenu();
+        this.ui.toast(`Fast travel: ${route.name}`);
+        break;
+      }
       case 'time-noon':
         this.setTime(52);
         this.ui.toast('Midday');
@@ -437,7 +467,7 @@ class App {
         break;
       case 'quit-event':
         this.events.quit();
-        this.traffic.spawn(4, this.vehicle.root.position);
+        this.spawnTraffic();
         this.stunts.enabled = true;
         this.ui.renderEvents(EVENTS, prog, null);
         this.closeMenu();
@@ -499,7 +529,7 @@ class App {
           if (this.events.active) {
             this.events.quit();
             this.stunts.enabled = true;
-            this.traffic.spawn(4, this.vehicle.root.position);
+            this.spawnTraffic();
           }
           prog.resetAll();
           this.vehicle.applyPreset(prog.selectedPreset, prog.selectedPaint);
@@ -508,7 +538,7 @@ class App {
         }
         break;
       case 'redraw-map':
-        this.ui.drawWorldMap(this.vehicle, this.env, prog);
+        this.ui.drawWorldMap(this.vehicle, this.env, prog, EVENTS);
         break;
     }
   }
@@ -540,6 +570,12 @@ class App {
       case 'time':
         this.setTime(value, false);
         break;
+      case 'grass':
+        this.env.veg.setGrassDensity(value);
+        break;
+      case 'traffic':
+        if (!this.events.active) this.spawnTraffic();
+        break;
       case 'resolution':
         this.resolutionScale = value;
         this.onResize();
@@ -551,19 +587,9 @@ class App {
     this.env.setTimeOfDay(elevation);
     this.progression.setSetting('time', elevation);
     if (syncSlider) this.ui.setTimeSlider(elevation);
-    // Env-map regeneration is debounced (slider drags fire rapidly)
-    this._envDirty = true;
-    this._envTimer = 0.15;
-  }
-
-  _updateEnvMap() {
-    const src = this.env.sky.material.uniforms;
-    const dst = this.envSky.material.uniforms;
-    for (const k of ['uSunDir', 'uZenith', 'uHorizon', 'uGround', 'uSunColor']) dst[k].value.copy(src[k].value);
-    dst.uSunset.value = src.uSunset.value;
-    if (this.envRT) this.envRT.dispose();
-    this.envRT = this.pmrem.fromScene(this.envScene, 0.02, 0.1, 1000);
-    this.scene.environment = this.envRT.texture;
+    const lamps = this.env.lampLevel ?? 0;
+    this.vehicle?.setHeadlights(lamps);
+    this.traffic?.setHeadlights(lamps);
   }
 
   onResize() {
@@ -674,6 +700,17 @@ class App {
     // ---- HUD
     if (this.state === STATE.GAMEPLAY) {
       this.ui.updateHUD(v);
+      if (this.frame % 30 === 0) {
+        const p = v.root.position;
+        let region = 'Countryside';
+        if (this.env.city.contains(p.x, p.z, 20)) region = 'Neon City';
+        else if (p.x > -420 && p.x < 620 && p.z > -480 && p.z < 380) region = 'Festival Site';
+        else {
+          const n = this.env.roads.nearest(p.x, p.z);
+          if (n.d2 < 60 * 60 && n.route.name) region = n.route.name;
+        }
+        this.ui.setRegion(region);
+      }
       if (this.frame % 2 === 0) {
         this.ui.drawMinimap(v, this.env, this.events.markers() ?? { cars: this.traffic.positions(), checkpoint: null, freeRoam: true });
       }
@@ -687,14 +724,6 @@ class App {
       this.progression.save();
     }
 
-    // ---- Deferred env-map refresh
-    if (this._envDirty) {
-      this._envTimer -= dt;
-      if (this._envTimer <= 0) {
-        this._envDirty = false;
-        this._updateEnvMap();
-      }
-    }
 
     // ---- Render
     this.post.setSpeed(this.state === STATE.GAMEPLAY ? v.speedAbs / 80 : 0);

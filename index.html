@@ -231,6 +231,7 @@
           <button class="card card--mini card--cyan" data-action="reset"><div class="card__title">Reset Car</div></button>
           <button class="card card--mini card--yellow" data-action="time-golden"><div class="card__title">Golden Hour</div></button>
           <button class="card card--mini card--lime" data-action="time-noon"><div class="card__title">Midday</div></button>
+          <button class="card card--mini card--violet" data-action="time-night"><div class="card__title">Night</div></button>
           <button class="card card--mini card--violet" data-action="camera"><div class="card__title">Camera</div><div class="card__sub" id="camera-label">Close Chase</div></button>
           <button class="card card--mini card--danger" data-action="quit-event" id="quit-event" hidden><div class="card__title">Quit Event</div></button>
         </div>
@@ -253,9 +254,18 @@
     <section class="menu__panel" data-panel="map">
       <div class="map-wrap">
         <canvas id="world-map" width="900" height="600"></canvas>
+        <div class="fast-travel">
+          <div class="fast-travel__label">FAST TRAVEL</div>
+          <button class="btn btn--small" data-action="travel" data-arg="festival">Festival Site</button>
+          <button class="btn btn--small" data-action="travel" data-arg="city">Neon City</button>
+          <button class="btn btn--small" data-action="travel" data-arg="mountain">Fuji Pass</button>
+          <button class="btn btn--small" data-action="travel" data-arg="highway">Horizon Highway</button>
+        </div>
         <div class="map-legend">
           <span><i class="dot dot--player"></i> You</span>
-          <span><i class="dot dot--road"></i> Festival Loop</span>
+          <span><i class="dot dot--road"></i> Roads</span>
+          <span><i class="dot dot--hwy"></i> Highway</span>
+          <span><i class="dot dot--flag"></i> Race start</span>
           <span><i class="dot dot--trap"></i> Speed trap / zone</span>
           <span><i class="dot dot--drift"></i> Drift zone</span>
           <span><i class="dot dot--jump"></i> Danger sign</span>
@@ -307,11 +317,19 @@
         </label>
         <label class="card card--setting">
           <div class="card__title">Time of Day</div>
-          <input type="range" id="set-time" min="4" max="60" value="38" />
+          <input type="range" id="set-time" min="-14" max="65" value="38" />
         </label>
         <label class="card card--setting">
           <div class="card__title">Resolution Scale</div>
           <select id="set-res"><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Grass</div>
+          <select id="set-grass"><option value="high">High</option><option value="low">Low</option><option value="off">Off</option></select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Traffic</div>
+          <select id="set-traffic"><option value="1">Normal</option><option value="1.6">Busy</option><option value="0.5">Light</option><option value="0">Off</option></select>
         </label>
         <button class="card card--setting card--danger" data-action="reset-progress">
           <div class="card__title">Reset Progress</div>
@@ -322,7 +340,7 @@
           <ul class="controls">
             <li><kbd>W</kbd>/<kbd>↑</kbd> Throttle · <kbd>S</kbd>/<kbd>↓</kbd> Brake / Reverse</li>
             <li><kbd>A</kbd> <kbd>D</kbd>/<kbd>←</kbd> <kbd>→</kbd> Steer · <kbd>Space</kbd> Handbrake</li>
-            <li><kbd>C</kbd> Camera · <kbd>R</kbd> Reset · <kbd>M</kbd> Radio · <kbd>Esc</kbd> Menu</li>
+            <li><kbd>C</kbd> Camera (chase / far / bumper) · <kbd>R</kbd> Reset · <kbd>M</kbd> Radio · <kbd>Esc</kbd> Menu</li>
             <li>Gamepad: RT/LT, L-Stick, A handbrake, Y reset, View camera, Start menu</li>
           </ul>
         </div>

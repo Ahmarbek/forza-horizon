@@ -24,7 +24,7 @@ const DEFAULT = () => ({
   stats: { bestChain: 0, longestDrift: 0, topSpeed: 0, racesWon: 0, distance: 0 },
   settings: {
     units: 'mph', bloom: true, blur: true, shadows: 2048, time: 38, resolution: 1,
-    master: 0.8, music: 0.35, sfx: 0.8, radio: true, difficulty: 'normal',
+    master: 0.8, music: 0.35, sfx: 0.8, radio: true, difficulty: 'normal', grass: 'high', traffic: 1,
   },
 });
 

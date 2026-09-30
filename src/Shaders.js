@@ -92,7 +92,7 @@ export function createSkyMaterial() {
         vec3 warm = vec3(1.0, 0.55, 0.3);
         col = mix(col, warm, uSunset * pow(1.0 - clamp(h, 0.0, 1.0), 6.0) * (0.35 + 0.65 * pow(sunAmt, 3.0)));
         // Below horizon fades into ground haze
-        col = mix(col, uGround, smoothstep(0.0, -0.25, h));
+        col = mix(col, uGround, (1.0 - smoothstep(-0.25, 0.0, h)));
         // Soft cirrus clouds
         if (h > 0.0) {
           vec2 uv = dir.xz / (h + 0.15) * 1.3;
@@ -240,7 +240,7 @@ export function createPetalMaterial() {
         vec4 mv = viewMatrix * vec4(world, 1.0);
         gl_Position = projectionMatrix * mv;
         gl_PointSize = (4.0 + aSeed * 4.0) * uPixelRatio * (30.0 / -mv.z);
-        vFade = smoothstep(uBox * 0.5, uBox * 0.3, length(rel.xz)) * smoothstep(0.0, 2.0, p.y);
+        vFade = (1.0 - smoothstep(uBox * 0.3, uBox * 0.5, length(rel.xz))) * smoothstep(0.0, 2.0, p.y);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -251,7 +251,7 @@ export function createPetalMaterial() {
         float ang = vSeed * 6.2831;
         c = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * c;
         float d = length(c * vec2(1.0, 1.9));
-        float a = smoothstep(0.5, 0.35, d) * vFade * 0.9;
+        float a = (1.0 - smoothstep(0.35, 0.5, d)) * vFade * 0.9;
         if (a < 0.01) discard;
         vec3 col = mix(vec3(1.0, 0.72, 0.84), vec3(1.0, 0.9, 0.95), vSeed);
         gl_FragColor = vec4(col, a);
@@ -270,7 +270,9 @@ export const SpeedBlurShader = {
     tDiffuse: { value: null },
     uStrength: { value: 0 },
     uCenter: { value: new THREE.Vector2(0.5, 0.52) },
-    uVignette: { value: 0.35 },
+    uVignette: { value: 0.3 },
+    uSaturation: { value: 1.1 },
+    uContrast: { value: 1.05 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -284,6 +286,8 @@ export const SpeedBlurShader = {
     uniform float uStrength;
     uniform vec2 uCenter;
     uniform float uVignette;
+    uniform float uSaturation;
+    uniform float uContrast;
     varying vec2 vUv;
     const int SAMPLES = 10;
     void main() {
@@ -300,8 +304,12 @@ export const SpeedBlurShader = {
         total += w;
       }
       vec4 col = acc / total;
-      float vig = smoothstep(0.85, 0.25, dist * (1.0 + uStrength * 0.25));
+      float vig = (1.0 - smoothstep(0.25, 0.85, dist * (1.0 + uStrength * 0.25)));
       col.rgb *= mix(1.0 - uVignette, 1.0, vig);
+      // colour grade (linear HDR, before tone mapping)
+      float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
+      col.rgb = max(mix(vec3(luma), col.rgb, uSaturation), 0.0);
+      col.rgb = pow(col.rgb / 0.18, vec3(uContrast)) * 0.18;
       gl_FragColor = col;
     }
   `,
@@ -323,7 +331,7 @@ export function createPostProcessing(renderer, scene, camera) {
   composer.setSize(size.x, size.y);
 
   const renderPass = new RenderPass(scene, camera);
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.45, 0.5, 0.92);
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.38, 0.55, 1.4);
   const blurPass = new ShaderPass(SpeedBlurShader);
   const outputPass = new OutputPass();
 
@@ -346,7 +354,7 @@ export function createPostProcessing(renderer, scene, camera) {
     setSpeed(speed01) {
       const s = this.blurEnabled ? Math.max(0, speed01 - 0.35) / 0.65 : 0;
       blurPass.uniforms.uStrength.value = s * s * 1.6;
-      blurPass.enabled = s > 0.001 || blurPass.uniforms.uVignette.value > 0;
+      blurPass.enabled = true;
     },
     render(dt) {
       composer.render(dt);

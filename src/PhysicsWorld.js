@@ -97,6 +97,28 @@ export class PhysicsWorld {
     }
   }
 
+  /**
+   * Terrain heightfield. `heights` is Rapier layout (x-major: [ix * (n+1) + iz]),
+   * `terrain` provides heightAt/normalAt for the lite solver.
+   */
+  addHeightfield(segments, heights, size, terrain) {
+    if (this.backend === 'rapier') {
+      const R = this.RAPIER;
+      const body = this.world.createRigidBody(R.RigidBodyDesc.fixed());
+      const desc = R.ColliderDesc.heightfield(segments, segments, heights, { x: size, y: 1, z: size })
+        .setFriction(1.0)
+        .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
+      this.world.createCollider(desc, body);
+    } else {
+      this.lite.terrain = terrain;
+    }
+    // invisible walls at the world border
+    const h = size / 2;
+    for (const [x, z, hx, hz] of [[h + 5, 0, 5, h], [-h - 5, 0, 5, h], [0, h + 5, h, 5], [0, -h - 5, h, 5]]) {
+      this.addStaticBox(new THREE.Vector3(x, 300, z), new THREE.Vector3(hx, 700, hz), 0);
+    }
+  }
+
   /** Static oriented box (rotation about Y only). */
   addStaticBox(position, halfExtents, rotationY = 0) {
     if (this.backend === 'rapier') {
@@ -356,6 +378,11 @@ class LiteSolver {
     this.bodies = [];
     this.statics = []; // { center, half, cos, sin }
     this.ramps = []; // { x, z, cos, sin, hw, l, h }
+    this.grid = new Map();
+    this.bigStatics = [];
+    this._stamp = 0;
+    this._q = [];
+    this.terrain = null;
     this._corners = Array.from({ length: 8 }, () => new THREE.Vector3());
   }
 
@@ -366,12 +393,47 @@ class LiteSolver {
   }
 
   addStaticBox(position, halfExtents, rotationY) {
-    this.statics.push({
+    const s = {
       center: new THREE.Vector3().copy(position),
       half: new THREE.Vector3().copy(halfExtents),
       cos: Math.cos(rotationY),
       sin: Math.sin(rotationY),
-    });
+      stamp: 0,
+    };
+    this.statics.push(s);
+    // insert into a uniform XZ grid (bounding circle of the rotated box)
+    const r = Math.hypot(s.half.x, s.half.z);
+    const c0x = Math.floor((s.center.x - r) / LITE_CELL), c1x = Math.floor((s.center.x + r) / LITE_CELL);
+    const c0z = Math.floor((s.center.z - r) / LITE_CELL), c1z = Math.floor((s.center.z + r) / LITE_CELL);
+    if ((c1x - c0x + 1) * (c1z - c0z + 1) > 400) { this.bigStatics.push(s); return; }
+    for (let cx = c0x; cx <= c1x; cx++) {
+      for (let cz = c0z; cz <= c1z; cz++) {
+        const key = cx * 100003 + cz;
+        let cell = this.grid.get(key);
+        if (!cell) this.grid.set(key, (cell = []));
+        cell.push(s);
+      }
+    }
+  }
+
+  /** Statics whose cells overlap the XZ box; deduplicated via stamps. */
+  _query(minX, minZ, maxX, maxZ, out) {
+    out.length = 0;
+    const stamp = ++this._stamp;
+    const c0x = Math.floor(minX / LITE_CELL), c1x = Math.floor(maxX / LITE_CELL);
+    const c0z = Math.floor(minZ / LITE_CELL), c1z = Math.floor(maxZ / LITE_CELL);
+    for (let cx = c0x; cx <= c1x; cx++) {
+      for (let cz = c0z; cz <= c1z; cz++) {
+        const cell = this.grid.get(cx * 100003 + cz);
+        if (!cell) continue;
+        for (let i = 0; i < cell.length; i++) {
+          const s = cell[i];
+          if (s.stamp !== stamp) { s.stamp = stamp; out.push(s); }
+        }
+      }
+    }
+    for (const s of this.bigStatics) out.push(s);
+    return out;
   }
 
   addRamp(def) {
@@ -384,7 +446,10 @@ class LiteSolver {
   /** Ground height (plane + ramps) at x,z; writes the surface normal. */
   heightAt(x, z, normal) {
     let best = this.groundY;
-    if (normal) normal.set(0, 1, 0);
+    if (this.terrain) {
+      best = this.terrain.heightAt(x, z);
+      if (normal) this.terrain.normalAt(x, z, normal);
+    } else if (normal) normal.set(0, 1, 0);
     for (let i = 0; i < this.ramps.length; i++) {
       const r = this.ramps[i];
       const dx = x - r.x, dz = z - r.z;
@@ -410,7 +475,7 @@ class LiteSolver {
     // Ground plane + ramps (height field). Rays are near-vertical, so a few
     // fixed-point iterations on the height are enough.
     if (dir.y < -1e-6) {
-      let t = (this.groundY - origin.y) / dir.y;
+      let t = (this.heightAt(origin.x, origin.z, null) - origin.y) / dir.y;
       for (let it = 0; it < 4; it++) {
         const h = this.heightAt(origin.x + dir.x * t, origin.z + dir.z * t, null);
         t = (h - origin.y) / dir.y;
@@ -421,9 +486,11 @@ class LiteSolver {
         this.heightAt(origin.x + dir.x * t, origin.z + dir.z * t, out.normal);
       }
     }
-    // Static OBBs (slab test in box-local frame)
-    for (let i = 0; i < this.statics.length; i++) {
-      const s = this.statics[i];
+    // Static OBBs (slab test in box-local frame), grid-accelerated
+    const ex = origin.x + dir.x * maxDist, ez = origin.z + dir.z * maxDist;
+    const cand = this._query(Math.min(origin.x, ex), Math.min(origin.z, ez), Math.max(origin.x, ex), Math.max(origin.z, ez), this._q);
+    for (let i = 0; i < cand.length; i++) {
+      const s = cand[i];
       const ox = origin.x - s.center.x, oy = origin.y - s.center.y, oz = origin.z - s.center.z;
       // world->local: rotate by -theta about Y
       const lox = s.cos * ox - s.sin * oz, loz = s.sin * ox + s.cos * oz;
@@ -520,7 +587,9 @@ class LiteSolver {
     const r = Math.min(b.half.x, b.half.y * 1.6);
     for (let sIdx = -1; sIdx <= 1; sIdx++) {
       _sphere.set(0, 0, sIdx * (b.half.z - r)).applyQuaternion(b.q).add(b.p);
-      for (const s of this.statics) {
+      const cand = this._query(_sphere.x - r, _sphere.z - r, _sphere.x + r, _sphere.z + r, this._q);
+      for (let ci = 0; ci < cand.length; ci++) {
+        const s = cand[ci];
         const dx = _sphere.x - s.center.x, dy = _sphere.y - s.center.y, dz = _sphere.z - s.center.z;
         const lx = s.cos * dx - s.sin * dz, lz = s.sin * dx + s.cos * dz;
         const cx = Math.max(-s.half.x, Math.min(s.half.x, lx));
@@ -541,6 +610,7 @@ class LiteSolver {
 }
 
 const _gN = new THREE.Vector3(0, 1, 0);
+const LITE_CELL = 32;
 const _sphere = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _cp = new THREE.Vector3();

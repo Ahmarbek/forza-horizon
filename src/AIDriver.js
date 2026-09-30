@@ -20,8 +20,8 @@ const _left = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
 export class AIDriver {
-  constructor(env, { skill = 1, lane = 0, name = 'AI' } = {}) {
-    this.env = env;
+  constructor(route, { skill = 1, lane = 0, name = 'AI' } = {}) {
+    this.route = route;
     this.skill = skill; // ~0.85 (easy) … 1.05 (hard)
     this.baseLane = lane;
     this.lane = lane;
@@ -52,11 +52,11 @@ export class AIDriver {
       inp.throttle = 0; inp.brake = 1; inp.steer = 0; inp.handbrake = true;
       return inp;
     }
-    const env = this.env;
-    const n = env.trackSamples.length;
-    const spacing = env.sampleSpacing;
+    const route = this.route;
+    const n = route.count;
+    const spacing = route.spacing;
     const pos = v.root.position;
-    this.idx = env.nearestIndex(pos.x, pos.z, this.idx);
+    this.idx = route.nearestIndex(pos.x, pos.z, this.idx);
     const speed = Math.max(0, v.speed);
 
     // --- Traffic avoidance: shift lane if someone is close ahead
@@ -76,7 +76,7 @@ export class AIDriver {
 
     // --- Steering (pure pursuit)
     const look = 7 + speed * 0.55;
-    env.trackPoint(this.idx + look / spacing, this.lane, _tgt);
+    route.point(this.idx + look / spacing, this.lane, _tgt);
     _d.subVectors(_tgt, pos).setY(0);
     const ang = Math.atan2(_d.dot(_left), _d.dot(_fwd));
     const sf = 1 / (1 + speed * 0.05);
@@ -91,9 +91,9 @@ export class AIDriver {
     const win = Math.max(2, Math.round(12 / spacing));
     for (let d = 6; d < horizon; d += 8) {
       const i0 = this.idx + Math.round(d / spacing);
-      const t0 = env.trackTangents[((i0 - win) % n + n) % n];
-      const t1 = env.trackTangents[((i0 + win) % n + n) % n];
-      const dTheta = Math.acos(THREE.MathUtils.clamp(t0.dot(t1), -1, 1));
+      const a = route._wrap(i0 - win), b = route._wrap(i0 + win);
+      const dot = route.tx[a] * route.tx[b] + route.tz[a] * route.tz[b];
+      const dTheta = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
       const k = dTheta / (2 * win * spacing);
       if (k < 1e-4) continue;
       const vCorner = Math.sqrt((mu * 9.81) / k);
@@ -126,17 +126,17 @@ export class AIDriver {
       this.stuckTime = 0;
     }
     // Also respawn if we wandered far from the road
-    env.trackPoint(this.idx, 0, _p);
-    if (_p.distanceTo(pos) > 45) this.respawn(v);
+    route.point(this.idx, 0, _p);
+    if (Math.hypot(_p.x - pos.x, _p.z - pos.z) > 45 || pos.y < _p.y - 15) this.respawn(v);
     return inp;
   }
 
   respawn(v) {
-    const env = this.env;
-    const i = this.idx + Math.round(-6 / env.sampleSpacing);
-    env.trackPoint(i, this.baseLane, _p);
-    _p.y = 1.2;
-    v.reset(_p, env.trackYaw(i));
+    const route = this.route;
+    const i = this.idx + Math.round(-6 / route.spacing);
+    route.point(i, this.baseLane, _p);
+    _p.y += 1.2;
+    v.reset(_p, route.yaw(i));
     this.stuckTime = 0;
     this.reverseTime = 0;
   }

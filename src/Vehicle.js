@@ -135,8 +135,68 @@ export function performanceIndex(p) {
 
 export const PAINT_COLORS = ['#c9ccd4', '#c25a1d', '#ff2d8f', '#1f6feb', '#ffd23f', '#1b1d22', '#f4f4f4', '#27c485'];
 
-const MODEL_URL = './assets/car.glb';
-const MODEL_TIMEOUT_MS = 6000;
+const MODEL_DIR = './assets/cars/';
+const MODEL_TIMEOUT_MS = 12000;
+
+// ---------------------------------------------------------------------------
+// Car model cache (Blender-built glTF per car id) + shared materials
+// ---------------------------------------------------------------------------
+const modelCache = new Map();
+function loadCarModel(id) {
+  if (!modelCache.has(id)) {
+    const loader = new GLTFLoader();
+    const p = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('timeout')), MODEL_TIMEOUT_MS);
+      loader.load(`${MODEL_DIR}${id}.glb`, (g) => { clearTimeout(timer); resolve(g.scene); },
+        undefined, (e) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e?.message || e))); });
+    });
+    modelCache.set(id, p);
+  }
+  return modelCache.get(id);
+}
+
+/** Start downloading every car model up front (garage + AI use them all). */
+export function preloadCarModels() {
+  return Promise.allSettled(CAR_PRESETS.map((c) => loadCarModel(c.id)));
+}
+
+let SHARED = null;
+function sharedMaterials() {
+  if (SHARED) return SHARED;
+  SHARED = {
+    Glass: new THREE.MeshPhysicalMaterial({ color: 0x0b0f14, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.66, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.8 }),
+    Trim: new THREE.MeshStandardMaterial({ color: 0x0e0f11, roughness: 0.55, metalness: 0.2 }),
+    Grille: new THREE.MeshStandardMaterial({ color: 0x060607, roughness: 0.4, metalness: 0.35 }),
+    Carbon: new THREE.MeshPhysicalMaterial({ color: 0x131417, roughness: 0.32, metalness: 0.45, clearcoat: 1, clearcoatRoughness: 0.05 }),
+    Chrome: new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 1, roughness: 0.06 }),
+    Interior: new THREE.MeshStandardMaterial({ color: 0x19191b, roughness: 0.82 }),
+    Tire: new THREE.MeshStandardMaterial({ color: 0x151517, roughness: 0.9 }),
+    Rim: new THREE.MeshStandardMaterial({ color: 0xb9bdc5, metalness: 1, roughness: 0.2 }),
+    Brake: new THREE.MeshStandardMaterial({ color: 0x5d5d62, metalness: 1, roughness: 0.42 }),
+    Caliper: new THREE.MeshStandardMaterial({ color: 0xd61c1c, roughness: 0.35, metalness: 0.2 }),
+    Plate: new THREE.MeshStandardMaterial({ color: 0xf1f1ec, roughness: 0.45 }),
+  };
+  return SHARED;
+}
+
+let SHADOW_TEX = null;
+function contactShadowTexture() {
+  if (SHADOW_TEX) return SHADOW_TEX;
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 64, 4, 32, 64, 62);
+  g.addColorStop(0, 'rgba(0,0,0,0.75)');
+  g.addColorStop(0.55, 'rgba(0,0,0,0.45)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.save();
+  ctx.scale(1, 1);
+  ctx.fillRect(0, 0, 64, 128);
+  ctx.restore();
+  SHADOW_TEX = new THREE.CanvasTexture(c);
+  return SHADOW_TEX;
+}
 
 // Geometry constants (body-local, +Z forward, +X left, +Y up)
 const HALF_EXTENTS = { x: 0.92, y: 0.32, z: 2.15 };
@@ -376,16 +436,29 @@ export class Vehicle {
 
     this._buildProceduralModel();
     this._createBody();
-    if (this.isPlayer) this._tryLoadModel(MODEL_URL);
+    this._buildContactShadow();
+    this._loadModel(this.preset.id);
+  }
+
+  _buildContactShadow() {
+    const mat = new THREE.MeshBasicMaterial({
+      map: contactShadowTexture(), transparent: true, depthWrite: false, opacity: 0.85,
+      polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8,
+    });
+    this.contactShadow = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 5.2).rotateX(-Math.PI / 2), mat);
+    this.contactShadow.renderOrder = 2;
+    this.scene.add(this.contactShadow);
   }
 
   /** Remove from scene and physics world (AI cars between events). */
   dispose() {
+    this._disposed = true;
     this.physics.removeBody(this.body);
     this.scene.remove(this.root);
-    this.root.traverse((o) => {
-      if (o.isMesh) o.geometry.dispose();
-    });
+    this.scene.remove(this.contactShadow);
+    if (this.headSpot) this.scene.remove(this.headSpot, this.headSpot.target);
+    // geometries of glTF models are shared through the cache — only free procedural ones
+    this.bodyGroup.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
   }
 
   // -------------------------------------------------------------- Physics body
@@ -416,6 +489,7 @@ export class Vehicle {
     this.body.setRotation(quat, true);
     this._syncPoseImmediate();
     this.setPaint(paint ?? preset.color ?? '#' + color);
+    if (preset.id !== this._modelId) this._loadModel(preset.id);
   }
 
   setPaint(hex) {
@@ -819,6 +893,42 @@ export class Vehicle {
     this.tailGlowMaterial.uniforms.uIntensity.value = 0.25 + b * 1.25;
     const rev = this.direction === -1 ? 1 : 0;
     this.reverseMaterial.emissiveIntensity = THREE.MathUtils.lerp(this.reverseMaterial.emissiveIntensity, rev * 6, k);
+
+    // Contact shadow follows the ground under the car
+    let gy = 0, gn = 0;
+    for (const w of this.wheels) if (w.grounded) { gy += w.contact.y; gn++; }
+    const cs = this.contactShadow;
+    if (gn > 0) {
+      cs.visible = true;
+      cs.position.set(this.root.position.x, gy / gn + 0.03, this.root.position.z);
+      cs.rotation.y = Math.atan2(this.forward.x, this.forward.z);
+      cs.material.opacity = 0.85;
+    } else {
+      cs.material.opacity *= 0.9;
+    }
+
+    if (this.headSpot) {
+      this.headSpot.position.copy(this.root.position).addScaledVector(this.forward, 2.2).y += 0.1;
+      this.headSpot.target.position.copy(this.root.position).addScaledVector(this.forward, 30);
+      this.headSpot.target.position.y -= 3;
+      this.headSpot.target.updateMatrixWorld();
+    }
+  }
+
+  /** 0..1 night factor: headlight glow + (player) spotlight. */
+  setHeadlights(level) {
+    this.headMaterial.emissiveIntensity = 2 + level * 10;
+    if (this.isPlayer) {
+      if (!this.headSpot && level > 0.05) {
+        const s = new THREE.SpotLight(0xfff1dc, 0, 110, 0.55, 0.55, 1.2);
+        this.scene.add(s, s.target);
+        this.headSpot = s;
+      }
+      if (this.headSpot) {
+        this.headSpot.intensity = level * 320;
+        this.headSpot.visible = level > 0.05;
+      }
+    }
   }
 
   // ------------------------------------------------------ Procedural model
@@ -830,10 +940,11 @@ export class Vehicle {
 
     this.paintMaterial = new THREE.MeshPhysicalMaterial({
       color: this.preset.color,
-      metalness: 0.55,
-      roughness: 0.32,
+      metalness: 0.45,
+      roughness: 0.3,
       clearcoat: 1,
-      clearcoatRoughness: 0.06,
+      clearcoatRoughness: 0.025,
+      envMapIntensity: 1.25,
     });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x0a0d12, metalness: 0.2, roughness: 0.05, clearcoat: 1 });
     const trim = new THREE.MeshStandardMaterial({ color: 0x121317, roughness: 0.6, metalness: 0.2 });
@@ -956,12 +1067,14 @@ export class Vehicle {
       body.add(tl);
     }
     this.tailGlowMaterial = createTaillightGlowMaterial('#ff1030');
+    this.tailGlows = [];
     for (const sx of [-1, 1]) {
       const glow = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.5), this.tailGlowMaterial);
       glow.position.set(sx * 0.68, y0 + 0.5, -2.33);
       glow.rotation.y = Math.PI;
       glow.renderOrder = 5;
       body.add(glow);
+      this.tailGlows.push(glow);
     }
     // Reverse lights
     this.reverseMaterial = createLightLensMaterial('#ffffff', 0);
@@ -1000,6 +1113,8 @@ export class Vehicle {
       const caliper = new THREE.Mesh(caliperGeo, caliperMat);
       caliper.position.set((w.left ? 1 : -1) * (WHEEL_WIDTH / 2 - 0.06), 0.1, -0.12);
       pivot.add(spinner, caliper);
+      w.procParts = [...spinner.children];
+      w.procCaliper = caliper;
       pivot.traverse((o) => { if (o.isMesh) o.castShadow = true; });
       pivot.position.set(w.mount.x, w.mount.y - REST_LENGTH, w.mount.z);
       w.pivot = pivot;
@@ -1008,59 +1123,90 @@ export class Vehicle {
     }
   }
 
-  // ------------------------------------------------------------ GLTF swap-in
-  _tryLoadModel(url) {
-    if (!url) return;
-    const loader = new GLTFLoader();
-    let settled = false;
-    const timer = setTimeout(() => {
-      settled = true;
-      console.info('[Vehicle] GLTF load timed out — keeping procedural model.');
-    }, MODEL_TIMEOUT_MS);
-
-    // HEAD probe first so a missing optional asset doesn't spam loader errors.
-    fetch(url, { method: 'HEAD' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return loader.loadAsync(url);
-      })
-      .then((gltf) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this._adoptModel(gltf.scene);
+  // ------------------------------------------------------------ glTF models
+  _loadModel(id) {
+    this._modelId = id;
+    loadCarModel(id)
+      .then((scene) => {
+        if (this._disposed || this._modelId !== id) return;
+        this._adoptModel(scene.clone(true));
       })
       .catch((err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        console.info(`[Vehicle] No GLTF car at ${url} (${err.message}) — using procedural model.`);
+        if (!this._warned) console.info(`[Vehicle] Car model "${id}" unavailable (${err.message}) — using procedural body.`);
+        this._warned = true;
       });
   }
 
   _adoptModel(model) {
     try {
-      const box = new THREE.Box3().setFromObject(model);
-      const size = box.getSize(new THREE.Vector3());
-      const scale = 4.5 / Math.max(size.x, size.z);
-      model.scale.setScalar(scale);
-      box.setFromObject(model);
-      const center = box.getCenter(new THREE.Vector3());
-      model.position.set(-center.x, -box.min.y - 0.62, -center.z);
-      model.traverse((o) => {
-        if (o.isMesh) {
-          o.castShadow = true;
-          o.receiveShadow = true;
-          // Hide model's own wheels if named; procedural ones animate with suspension.
-          if (/wheel|tire|tyre|rim/i.test(o.name)) o.visible = false;
-        }
+      const shared = sharedMaterials();
+      const own = { Paint: this.paintMaterial, Headlight: this.headMaterial, Taillight: this.tailLensMaterial, Reverse: this.reverseMaterial };
+      const wheelSrc = model.getObjectByName('Wheel');
+      const caliperSrc = model.getObjectByName('Caliper');
+      if (wheelSrc) wheelSrc.removeFromParent();
+      if (caliperSrc) caliperSrc.removeFromParent();
+      const bind = (root) => root.traverse((o) => {
+        if (!o.isMesh) return;
+        const name = (o.material?.name || '').split('.')[0];
+        o.material = own[name] || shared[name] || o.material;
+        o.castShadow = true;
+        o.receiveShadow = true;
+        o.userData.shared = true;
       });
-      this.bodyGroup.visible = false;
+      bind(model);
+      if (this.gltfModel) this.root.remove(this.gltfModel);
+      model.position.set(0, -0.62, 0);
       this.root.add(model);
       this.gltfModel = model;
-      console.info('[Vehicle] GLTF car model loaded.');
+      this.bodyGroup.visible = false;
+
+      // Replace wheel visuals (keep pivots/spinners so suspension + spin still animate)
+      if (wheelSrc) {
+        bind(wheelSrc);
+        if (caliperSrc) bind(caliperSrc);
+        for (const w of this.wheels) {
+          for (const p of w.procParts) p.removeFromParent();
+          if (w.procCaliper) w.procCaliper.removeFromParent();
+          if (w.modelWheel) w.modelWheel.removeFromParent();
+          if (w.modelCaliper) w.modelCaliper.removeFromParent();
+          const wh = wheelSrc.clone(true);
+          wh.position.set(0, 0, 0);
+          wh.rotation.set(0, w.left ? 0 : Math.PI, 0);
+          w.spinner.add(wh);
+          w.modelWheel = wh;
+          if (caliperSrc) {
+            const c = caliperSrc.clone(true);
+            const holder = new THREE.Group();
+            holder.rotation.y = w.left ? 0 : Math.PI;
+            holder.add(c);
+            w.pivot.add(holder);
+            w.modelCaliper = holder;
+          }
+        }
+      }
+
+      // Move the taillight glow billboards onto the model's lamp clusters
+      this.root.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(this.root.matrixWorld).invert();
+      const box = new THREE.Box3();
+      const tmp = new THREE.Box3();
+      model.traverse((o) => {
+        if (o.isMesh && o.material === this.tailLensMaterial) {
+          tmp.setFromObject(o).applyMatrix4(inv);
+          box.union(tmp);
+        }
+      });
+      if (!box.isEmpty() && this.tailGlows) {
+        const cy = (box.min.y + box.max.y) / 2;
+        this.tailGlows.forEach((g, i) => {
+          g.removeFromParent();
+          const sx = i === 0 ? -1 : 1;
+          g.position.set(sx * Math.max(0.35, box.max.x - 0.18), cy, box.min.z - 0.05);
+          this.root.add(g);
+        });
+      }
     } catch (err) {
-      console.warn('[Vehicle] Failed to adopt GLTF model, keeping procedural.', err);
+      console.warn('[Vehicle] Failed to adopt car model, keeping procedural body.', err);
       this.bodyGroup.visible = true;
     }
   }

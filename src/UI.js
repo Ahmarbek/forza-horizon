@@ -21,7 +21,7 @@ const MAX_RPM = 9000;
 const REDLINE = 7500;
 const MS_TO_MPH = 2.23694;
 const MS_TO_KMH = 3.6;
-const MINIMAP_RANGE = 170; // metres from centre to edge
+const MINIMAP_RANGE = 200; // metres from centre to edge
 const STUNT_COLORS = { trap: '#2de2ff', zone: '#2de2ff', drift: '#b36bff', jump: '#ffd23f' };
 const STUNT_LABELS = { trap: 'SPEED TRAP', zone: 'SPEED ZONE', drift: 'DRIFT ZONE', jump: 'DANGER SIGN' };
 
@@ -220,6 +220,8 @@ export class UI {
     const scale = half / MINIMAP_RANGE;
     const p = vehicle.root.position;
     const yaw = Math.atan2(vehicle.forward.x, vehicle.forward.z);
+    const racing = markers && !markers.freeRoam;
+    const view = MINIMAP_RANGE * 1.5;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, W);
@@ -227,67 +229,72 @@ export class UI {
     ctx.beginPath();
     ctx.arc(half, half, half, 0, Math.PI * 2);
     ctx.clip();
-
     // World → minimap: car at centre, heading up; world +X is "left" → mirror.
     ctx.translate(half, half);
     ctx.rotate(yaw);
     ctx.scale(-scale, -scale);
     ctx.translate(-p.x, -p.z);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = 1 / scale;
-    const g0x = Math.floor((p.x - 250) / 50) * 50, g0z = Math.floor((p.z - 250) / 50) * 50;
-    ctx.beginPath();
-    for (let x = g0x; x < p.x + 250; x += 50) { ctx.moveTo(x, p.z - 250); ctx.lineTo(x, p.z + 250); }
-    for (let z = g0z; z < p.z + 250; z += 50) { ctx.moveTo(p.x - 250, z); ctx.lineTo(p.x + 250, z); }
-    ctx.stroke();
-
-    const pts = env.trackPoints2D;
-    ctx.beginPath();
-    ctx.moveTo(pts[0], pts[1]);
-    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
-    ctx.closePath();
+    // city blocks
+    const city = env.city;
+    if (city.contains(p.x, p.z, view)) {
+      ctx.fillStyle = 'rgba(60,64,76,0.9)';
+      const r = city.rect;
+      ctx.fillRect(r.minX - 9, r.minZ - 9, r.maxX - r.minX + 18, r.maxZ - r.minZ + 18);
+      ctx.fillStyle = 'rgba(28,30,38,0.95)';
+      for (const b of city.blocks) ctx.fillRect(b.minX, b.minZ, b.maxX - b.minX, b.maxZ - b.minZ);
+    }
+    // roads
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-    ctx.lineWidth = 20;
-    ctx.stroke();
-    ctx.strokeStyle = '#3d4250';
-    ctx.lineWidth = 14;
-    ctx.stroke();
-    const racing = markers && !markers.freeRoam;
-    ctx.strokeStyle = racing ? 'rgba(255,45,143,0.9)' : 'rgba(45,226,255,0.8)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    ctx.lineCap = 'round';
+    const trace = (r, step) => {
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < r.count; i += step) {
+        const x = r.xs[i], z = r.zs[i];
+        const near = Math.abs(x - p.x) < view && Math.abs(z - p.z) < view;
+        if (near) { if (pen) ctx.lineTo(x, z); else ctx.moveTo(x, z); pen = true; }
+        else pen = false;
+      }
+      if (r.closed && pen) ctx.lineTo(r.xs[0], r.zs[0]);
+    };
+    for (const r of env.roads.all) {
+      if (!r.render) continue;
+      trace(r, 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = r.width + 5;
+      ctx.stroke();
+      ctx.strokeStyle = '#3d4250';
+      ctx.lineWidth = r.width;
+      ctx.stroke();
+    }
+    if (racing && markers.route) {
+      trace(markers.route, 2);
+      ctx.strokeStyle = 'rgba(255,45,143,0.95)';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
 
     ctx.fillStyle = 'rgba(80,86,100,0.9)';
     ctx.fillRect(-45, -110, 90, 100);
 
-    // stunt icons (free roam)
     if (!racing) {
       for (const st of env.stunts) {
-        const pos = st.type === 'jump' ? st.ramp : env.trackSamples[st.index];
+        const pos = st.type === 'jump' ? st.ramp : { x: st.route.xs[st.index], z: st.route.zs[st.index] };
+        if (Math.abs(pos.x - p.x) > view || Math.abs(pos.z - p.z) > view) continue;
         ctx.fillStyle = STUNT_COLORS[st.type];
         ctx.beginPath();
-        ctx.arc(pos.x, pos.z, 5, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.z, 6, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-
-    ctx.fillStyle = '#ff7a1a';
-    for (const c of env.cones) {
-      const t = c.body ? c.body.translation() : c;
-      ctx.beginPath();
-      ctx.arc(t.x, t.z, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
     if (markers) {
       if (markers.checkpoint) {
         const c = markers.checkpoint;
         ctx.strokeStyle = '#ffd23f';
-        ctx.lineWidth = 3 / scale + 2;
+        ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.arc(c.x, c.z, 9, 0, Math.PI * 2);
+        ctx.arc(c.x, c.z, 10, 0, Math.PI * 2);
         ctx.stroke();
       }
       ctx.fillStyle = racing ? '#ff4d5e' : 'rgba(255,255,255,0.85)';
@@ -299,7 +306,6 @@ export class UI {
     }
     ctx.restore();
 
-    // player arrow (always centre, pointing up)
     ctx.save();
     ctx.translate(half, half);
     ctx.fillStyle = '#ffd23f';
@@ -316,7 +322,7 @@ export class UI {
     ctx.restore();
   }
 
-  drawWorldMap(vehicle, env, progression) {
+  drawWorldMap(vehicle, env, progression, events) {
     const canvas = this.el.worldMap;
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -325,76 +331,82 @@ export class UI {
     const ctx = this.mapCtx;
     const W = canvas.width, H = canvas.height;
     const b = env.mapBounds;
-    const pad = 40 * dpr;
+    const pad = 16 * dpr;
     const s = Math.min((W - pad * 2) / (b.maxX - b.minX), (H - pad * 2) / (b.maxZ - b.minZ));
     const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
-    // North (+Z) up, world +X to the left (mirrored like the minimap)
-    const X = (x) => W / 2 - (x - cx) * s;
+    const X = (x) => W / 2 - (x - cx) * s; // mirrored like the minimap
     const Y = (z) => H / 2 - (z - cz) * s;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const bg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.7);
-    bg.addColorStop(0, '#1d2a22');
-    bg.addColorStop(1, '#0c1210');
-    ctx.fillStyle = bg;
+    ctx.fillStyle = '#0c1210';
     ctx.fillRect(0, 0, W, H);
+    const img = env.mapCanvas();
+    ctx.drawImage(img, X(b.maxX), Y(b.maxZ), (b.maxX - b.minX) * s, (b.maxZ - b.minZ) * s);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = 1;
-    for (let x = Math.ceil(b.minX / 100) * 100; x <= b.maxX; x += 100) {
-      ctx.beginPath(); ctx.moveTo(X(x), 0); ctx.lineTo(X(x), H); ctx.stroke();
-    }
-    for (let z = Math.ceil(b.minZ / 100) * 100; z <= b.maxZ; z += 100) {
-      ctx.beginPath(); ctx.moveTo(0, Y(z)); ctx.lineTo(W, Y(z)); ctx.stroke();
-    }
-
-    const tp = env.treePositions;
-    for (let i = 0; i < tp.length; i += 3) {
-      ctx.fillStyle = tp[i + 2] === 1 ? 'rgba(255,179,209,0.6)' : 'rgba(80,140,90,0.5)';
-      ctx.beginPath();
-      ctx.arc(X(tp[i]), Y(tp[i + 1]), (tp[i + 2] === 1 ? 2.4 : 1.8) * dpr, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    const pts = env.trackPoints2D;
-    ctx.beginPath();
-    ctx.moveTo(X(pts[0]), Y(pts[1]));
-    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(X(pts[i]), Y(pts[i + 1]));
-    ctx.closePath();
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#f2f2f2';
-    ctx.lineWidth = 14 * s + 4 * dpr;
-    ctx.stroke();
-    ctx.strokeStyle = '#555b69';
-    ctx.lineWidth = 14 * s;
-    ctx.stroke();
+    for (const r of env.roads.all) {
+      if (!r.render) continue;
+      ctx.beginPath();
+      ctx.moveTo(X(r.xs[0]), Y(r.zs[0]));
+      for (let i = 3; i < r.count; i += 3) ctx.lineTo(X(r.xs[i]), Y(r.zs[i]));
+      if (r.closed) ctx.closePath();
+      ctx.strokeStyle = r.type === 'highway' ? '#ffd23f' : '#f2f2f2';
+      ctx.lineWidth = Math.max(2 * dpr, r.width * s * 1.4);
+      ctx.stroke();
+    }
+    const city = env.city.rect;
+    ctx.strokeStyle = 'rgba(255,45,143,0.8)';
+    ctx.lineWidth = 2 * dpr;
+    ctx.strokeRect(X(city.maxX), Y(city.maxZ), (city.maxX - city.minX) * s, (city.maxZ - city.minZ) * s);
 
-    ctx.fillStyle = '#555b69';
-    ctx.fillRect(X(45), Y(-10), 90 * s, 100 * s);
-    ctx.fillStyle = '#ff2d8f';
-    ctx.font = `800 ${14 * dpr}px "Barlow Condensed", sans-serif`;
-    ctx.fillText('FESTIVAL SITE', X(45), Y(-10) - 6 * dpr);
+    const label = (text, x, z, color = '#fff', size = 15) => {
+      ctx.font = `800 ${size * dpr}px "Barlow Condensed", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.strokeText(text, X(x), Y(z));
+      ctx.fillStyle = color;
+      ctx.fillText(text, X(x), Y(z));
+    };
+    label('NEON CITY', (city.minX + city.maxX) / 2, city.maxZ + 40, '#ff7ab8', 18);
+    label('FESTIVAL SITE', 200, 330, '#ff7ab8', 16);
+    label('FUJI PASS', -780, -640, '#ffffff', 15);
+    label('HORIZON HIGHWAY', 1000, 300, '#ffd23f', 14);
 
+    // race starts
+    if (events) {
+      const seen = new Set();
+      for (const ev of events) {
+        const r = env.routes[ev.route];
+        if (seen.has(r)) continue;
+        seen.add(r);
+        const x = X(r.xs[r.startIndex]), y = Y(r.zs[r.startIndex]);
+        ctx.fillStyle = '#ff2d8f';
+        ctx.beginPath();
+        ctx.moveTo(x, y); ctx.lineTo(x, y - 16 * dpr); ctx.lineTo(x + 11 * dpr, y - 11 * dpr); ctx.lineTo(x, y - 7 * dpr);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 16 * dpr); ctx.stroke();
+      }
+    }
     // PR stunts with star ratings
     ctx.textAlign = 'center';
     for (const st of env.stunts) {
-      const pos = st.type === 'jump' ? st.ramp : env.trackSamples[st.index];
+      const pos = st.type === 'jump' ? st.ramp : { x: st.route.xs[st.index], z: st.route.zs[st.index] };
       const x = X(pos.x), y = Y(pos.z);
       ctx.fillStyle = STUNT_COLORS[st.type];
       ctx.beginPath();
-      ctx.arc(x, y, 7 * dpr, 0, Math.PI * 2);
+      ctx.arc(x, y, 5.5 * dpr, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 2;
       ctx.stroke();
       const rec = progression?.data.stunts[st.id];
-      ctx.fillStyle = '#fff';
-      ctx.font = `700 ${12 * dpr}px "Barlow Condensed", sans-serif`;
-      ctx.fillText(st.name.toUpperCase(), x, y - 12 * dpr);
       ctx.fillStyle = '#ffd23f';
-      ctx.fillText('★'.repeat(rec?.stars || 0) + '☆'.repeat(3 - (rec?.stars || 0)), x, y + 20 * dpr);
+      ctx.font = `700 ${11 * dpr}px "Barlow Condensed", sans-serif`;
+      ctx.fillText('★'.repeat(rec?.stars || 0) + '☆'.repeat(3 - (rec?.stars || 0)), x, y + 16 * dpr);
     }
-    ctx.textAlign = 'left';
 
     const p = vehicle.root.position;
     const yaw = Math.atan2(vehicle.forward.x, vehicle.forward.z);
@@ -405,16 +417,17 @@ export class UI {
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(0, -12 * dpr);
-    ctx.lineTo(8 * dpr, 9 * dpr);
-    ctx.lineTo(0, 4 * dpr);
-    ctx.lineTo(-8 * dpr, 9 * dpr);
+    ctx.moveTo(0, -13 * dpr);
+    ctx.lineTo(9 * dpr, 10 * dpr);
+    ctx.lineTo(0, 5 * dpr);
+    ctx.lineTo(-9 * dpr, 10 * dpr);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
     ctx.restore();
 
     ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
     ctx.font = `800 ${20 * dpr}px "Barlow Condensed", sans-serif`;
     ctx.fillText('N ↑', W - 60 * dpr, 34 * dpr);
   }
@@ -476,6 +489,12 @@ export class UI {
     t.classList.add('is-on');
     clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => t.classList.remove('is-on'), ms);
+  }
+
+  setRegion(text) {
+    if (this._last.region === text) return;
+    this._last.region = text;
+    this.$('banner-sub').textContent = `Free Roam · ${text}`;
   }
 
   setCameraLabel(label) {
@@ -613,8 +632,9 @@ export class UI {
       if (ev.type === 'race') record = rec.bestPosition ? `Best: ${ordinal(rec.bestPosition)} · Wins ${rec.wins || 0}` : 'Not raced yet';
       else record = rec.bestLap ? `Best lap ${formatTime(rec.bestLap)} ${'★'.repeat(rec.stars || 0)}` : 'No time set';
       const top = ev.type === 'race' ? `Win ${fmt(ev.payout[0])} CR` : `Up to ${fmt(ev.payout[2])} CR`;
+      const kind = ev.type === 'race' ? (ev.route === 'city' ? 'STREET RACE' : ev.route === 'highway' ? 'HIGHWAY RACE' : ev.route === 'mountain' ? 'MOUNTAIN RACE' : 'ROAD RACE') : 'TIME TRIAL';
       return `<button class="card event-card event-card--${ev.type}" data-action="start-event" data-arg="${ev.id}">
-        <div class="event-card__type">${ev.type === 'race' ? 'ROAD RACE' : 'TIME TRIAL'}${activeId === ev.id ? ' · ACTIVE' : ''}</div>
+        <div class="event-card__type">${kind}${activeId === ev.id ? ' · ACTIVE' : ''}</div>
         <div>
           <div class="card__title">${ev.name}</div>
           <div class="card__sub">${ev.desc} · ${top}</div>
@@ -655,7 +675,10 @@ export class UI {
       const color = owned ? d.owned[car.id].paint : car.color;
       card.innerHTML = `
         <div class="car-card__class">${pi.label}</div>
-        <div class="car-card__silhouette" style="--car-color:${color}"></div>
+        <div class="car-card__thumb">
+          <img src="assets/cars/${car.id}.png" alt="${car.name}" loading="lazy"
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'car-card__silhouette',style:'--car-color:${color}'}))" />
+        </div>
         <div>
           <div class="card__title">${car.name}</div>
           <div class="card__sub">${car.drive} · ${Math.round(tuned.topSpeed * MS_TO_MPH)} mph</div>
@@ -701,6 +724,8 @@ export class UI {
     on('set-shadows', 'shadows', 'change', (el) => Number(el.value));
     on('set-time', 'time', 'input', (el) => Number(el.value));
     on('set-res', 'resolution', 'change', (el) => Number(el.value));
+    on('set-grass', 'grass');
+    on('set-traffic', 'traffic', 'change', (el) => Number(el.value));
     on('set-master', 'master', 'input', (el) => Number(el.value) / 100);
     on('set-music', 'music', 'input', (el) => Number(el.value) / 100);
     on('set-sfx', 'sfx', 'input', (el) => Number(el.value) / 100);
@@ -716,6 +741,8 @@ export class UI {
     this.$('set-shadows').value = String(s.shadows);
     this.$('set-time').value = String(s.time);
     this.$('set-res').value = String(s.resolution);
+    this.$('set-grass').value = s.grass;
+    this.$('set-traffic').value = String(s.traffic);
     this.$('set-master').value = String(Math.round(s.master * 100));
     this.$('set-music').value = String(Math.round(s.music * 100));
     this.$('set-sfx').value = String(Math.round(s.sfx * 100));
