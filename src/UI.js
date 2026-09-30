@@ -704,7 +704,7 @@ export class UI {
       const w = ctx.measureText(text).width + 8 * dpr, h = size * dpr * 1.15;
       const px = X(x), py = Y(z);
       if (px < -w || py < -h || px > W + w || py > H + h) continue;
-      const at = [0, -h, h].map((dy) => box(px, py + dy, w, h)).find((b) => !clash(b));
+      const at = [0, -h * 1.25, h * 1.25].map((dy) => box(px, py + dy, w, h)).find((b) => !clash(b));
       if (!at) continue;
       taken.push(at);
       const ty = (at.y0 + at.y1) / 2;
