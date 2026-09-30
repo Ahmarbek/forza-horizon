@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d14" />
   <title>Horizon Drive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,7 +21,7 @@
   </script>
 </head>
 <body>
-  <canvas id="scene"></canvas>
+  <canvas id="scene" tabindex="0"></canvas>
 
   <!-- ============================== LOADING ============================== -->
   <div id="loader" class="loader">
@@ -29,9 +30,25 @@
     <div id="loader-text" class="loader__text">Initialising physics…</div>
   </div>
 
+  <!-- =============================== TITLE =============================== -->
+  <div id="title" class="title" hidden>
+    <div class="title__brand">
+      <div class="title__small">WELCOME TO THE</div>
+      <div class="title__logo">HORIZON<span>SAKURA</span></div>
+      <div class="title__small">FESTIVAL</div>
+    </div>
+    <div class="title__profile">
+      <span>LEVEL <b id="title-level">1</b></span>
+      <span>CR <b id="title-credits">0</b></span>
+      <span id="title-car">Sakura GT</span>
+    </div>
+    <button id="title-start" class="title__start">PRESS ANY KEY TO DRIVE</button>
+    <div class="title__hint">Headphones recommended · Gamepad supported</div>
+  </div>
+
   <!-- ================================ HUD ================================ -->
   <div id="hud" class="hud">
-    <!-- Top-center: skill chain popups -->
+    <!-- Top-center: skill chain / zone meter / stunt banner -->
     <div class="skills">
       <div id="skill-chain" class="skill-chain">
         <div class="skill-chain__label">SKILL CHAIN</div>
@@ -41,27 +58,63 @@
         </div>
         <div class="skill-chain__timer"><div id="skill-chain-timer"></div></div>
       </div>
+      <div id="zone-meter" class="zone-meter">
+        <div id="zone-name" class="zone-meter__name">SPEED ZONE</div>
+        <div id="zone-value" class="zone-meter__value">0</div>
+        <div id="zone-stars" class="stars"></div>
+      </div>
       <div id="skill-feed" class="skill-feed"></div>
     </div>
 
-    <!-- Top-left: track banner -->
-    <div class="banner">
+    <div id="stunt-banner" class="stunt-banner">
+      <div id="stunt-type" class="stunt-banner__type">SPEED TRAP</div>
+      <div id="stunt-name" class="stunt-banner__name">Gantry Speed Trap</div>
+      <div id="stunt-value" class="stunt-banner__value">120 MPH</div>
+      <div id="stunt-stars" class="stars stars--big"></div>
+      <div id="stunt-extra" class="stunt-banner__extra"></div>
+    </div>
+
+    <!-- Top-left: free roam banner / race panel -->
+    <div id="banner" class="banner">
       <div class="banner__logo">HORIZON<b>SAKURA</b></div>
       <div id="banner-sub" class="banner__sub">Free Roam · Festival Loop</div>
     </div>
+    <div id="race-hud" class="race-hud">
+      <div id="race-name" class="race-hud__name">Sakura Circuit</div>
+      <div class="race-hud__row">
+        <div class="race-hud__pos"><span id="race-pos">1</span><small>/<span id="race-total">6</span></small></div>
+        <div class="race-hud__laps">
+          <div class="race-hud__label">LAP</div>
+          <div id="race-lap" class="race-hud__big">1/3</div>
+        </div>
+      </div>
+      <dl class="race-hud__times">
+        <dt>TIME</dt><dd id="race-time">0:00.000</dd>
+        <dt>LAP</dt><dd id="race-laptime">0:00.000</dd>
+        <dt>BEST</dt><dd id="race-best">--:--.---</dd>
+      </dl>
+    </div>
 
-    <!-- Top-right: total score -->
+    <!-- Top-right: level, credits, score -->
     <div class="score-box">
+      <div class="score-box__level">
+        <span class="score-box__lvl">LVL <b id="hud-level">1</b></span>
+        <span class="score-box__cr">CR <b id="hud-credits">0</b></span>
+      </div>
+      <div class="xp-bar"><i id="hud-xp"></i></div>
       <div class="score-box__label">SKILL SCORE</div>
       <div id="total-score" class="score-box__value">0</div>
     </div>
+
+    <div id="countdown" class="countdown"></div>
+    <div id="wrong-way" class="wrong-way">WRONG WAY</div>
 
     <!-- Bottom-left: minimap -->
     <div class="minimap">
       <canvas id="minimap-canvas" width="320" height="320"></canvas>
       <div class="minimap__ring"></div>
       <div class="minimap__north">N</div>
-      <div class="minimap__hint"><kbd>ESC</kbd> MENU <kbd>C</kbd> CAMERA <kbd>R</kbd> RESET</div>
+      <div class="minimap__hint"><kbd>ESC</kbd> MENU <kbd>C</kbd> CAMERA <kbd>R</kbd> RESET <kbd>M</kbd> RADIO</div>
     </div>
 
     <!-- Bottom-right: tachometer / speedo -->
@@ -93,14 +146,51 @@
     <div id="toast" class="toast"></div>
   </div>
 
+  <!-- ============================ TOUCH CONTROLS ========================= -->
+  <div id="touch" class="touch" hidden>
+    <div class="touch__left">
+      <button class="touch__btn" data-touch="left">◀</button>
+      <button class="touch__btn" data-touch="right">▶</button>
+    </div>
+    <div class="touch__right">
+      <button class="touch__btn touch__btn--small" data-touch="handbrake">HB</button>
+      <button class="touch__btn touch__btn--brake" data-touch="brake">BRAKE</button>
+      <button class="touch__btn touch__btn--gas" data-touch="throttle">GAS</button>
+    </div>
+    <button class="touch__menu" data-touch="menu">☰</button>
+  </div>
+
+  <!-- ================================ RESULTS ============================ -->
+  <div id="results" class="results" hidden>
+    <div class="results__card">
+      <div id="results-event" class="results__event">SAKURA CIRCUIT</div>
+      <div id="results-title" class="results__title">VICTORY!</div>
+      <div id="results-stars" class="stars stars--big"></div>
+      <table id="results-table" class="results__table"></table>
+      <div class="results__stats">
+        <div><span>TOTAL TIME</span><b id="results-time">0:00.000</b></div>
+        <div><span>BEST LAP</span><b id="results-lap">0:00.000</b></div>
+      </div>
+      <div class="results__rewards">
+        <div class="reward reward--cr">+<span id="results-credits">0</span> CR</div>
+        <div class="reward reward--xp">+<span id="results-xp">0</span> XP</div>
+      </div>
+      <div class="results__buttons">
+        <button id="results-retry" class="btn btn--ghost">Retry</button>
+        <button id="results-continue" class="btn">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ================================ MENU =============================== -->
   <div id="menu" class="menu" aria-hidden="true">
     <header class="menu__top">
       <div class="menu__profile">
-        <div class="menu__avatar">HD</div>
+        <div class="menu__avatar" id="menu-level">1</div>
         <div>
-          <div class="menu__name">Driver</div>
+          <div class="menu__name">Driver · Level <span id="menu-level-2">1</span></div>
           <div class="menu__credits">CR <span id="menu-credits">0</span></div>
+          <div class="xp-bar xp-bar--menu"><i id="menu-xp"></i></div>
         </div>
       </div>
       <nav class="menu__tabs" role="tablist">
@@ -112,7 +202,7 @@
         <span class="menu__bumper">RB</span>
       </nav>
       <div id="menu-car" class="menu__car">
-        <div class="menu__car-class">A 800</div>
+        <div id="menu-car-class" class="menu__car-class">A 800</div>
         <div id="menu-car-name" class="menu__car-name">Sakura GT</div>
       </div>
     </header>
@@ -125,44 +215,37 @@
           <div class="card__title">Resume<br />Drive</div>
           <div class="card__sub">Back to the Festival Loop</div>
         </button>
-        <button class="card card--cyan" data-action="reset">
-          <div class="card__icon">⟲</div>
-          <div class="card__title">Reset Car</div>
-          <div class="card__sub">Return to the start grid</div>
-        </button>
-        <button class="card card--yellow" data-action="time-golden">
-          <div class="card__icon">☀</div>
-          <div class="card__title">Golden Hour</div>
-          <div class="card__sub">Low sun, long shadows</div>
-        </button>
-        <button class="card card--lime" data-action="time-noon">
-          <div class="card__icon">◎</div>
-          <div class="card__title">Midday</div>
-          <div class="card__sub">Clear spring sky</div>
-        </button>
+        <div id="event-cards" class="event-cards"></div>
         <div class="card card--stats">
-          <div class="card__title">Skill Stats</div>
+          <div class="card__title">Career</div>
           <dl class="stats">
-            <dt>Total score</dt><dd id="stat-total">0</dd>
+            <dt>Skill score</dt><dd id="stat-total">0</dd>
             <dt>Best chain</dt><dd id="stat-best">0</dd>
+            <dt>Races won</dt><dd id="stat-wins">0</dd>
             <dt>Longest drift</dt><dd id="stat-drift">0 m</dd>
             <dt>Top speed</dt><dd id="stat-top">0</dd>
+            <dt>PR stars</dt><dd id="stat-stars">0</dd>
           </dl>
         </div>
-        <button class="card card--violet" data-action="camera">
-          <div class="card__icon">◉</div>
-          <div class="card__title">Camera</div>
-          <div class="card__sub" id="camera-label">Close Chase</div>
-        </button>
+        <div class="mini-cards">
+          <button class="card card--mini card--cyan" data-action="reset"><div class="card__title">Reset Car</div></button>
+          <button class="card card--mini card--yellow" data-action="time-golden"><div class="card__title">Golden Hour</div></button>
+          <button class="card card--mini card--lime" data-action="time-noon"><div class="card__title">Midday</div></button>
+          <button class="card card--mini card--violet" data-action="camera"><div class="card__title">Camera</div><div class="card__sub" id="camera-label">Close Chase</div></button>
+          <button class="card card--mini card--danger" data-action="quit-event" id="quit-event" hidden><div class="card__title">Quit Event</div></button>
+        </div>
       </div>
     </section>
 
     <!-- GARAGE -->
     <section class="menu__panel" data-panel="garage">
       <div class="grid grid--garage" id="garage-cars"></div>
-      <div class="paint">
-        <div class="paint__label">PAINT</div>
-        <div class="paint__swatches" id="paint-swatches"></div>
+      <div class="garage-bottom">
+        <div class="paint">
+          <div class="paint__label">PAINT</div>
+          <div class="paint__swatches" id="paint-swatches"></div>
+        </div>
+        <div class="upgrades" id="upgrades"></div>
       </div>
     </section>
 
@@ -173,8 +256,9 @@
         <div class="map-legend">
           <span><i class="dot dot--player"></i> You</span>
           <span><i class="dot dot--road"></i> Festival Loop</span>
-          <span><i class="dot dot--cone"></i> Cones</span>
-          <span><i class="dot dot--tree"></i> Sakura Grove</span>
+          <span><i class="dot dot--trap"></i> Speed trap / zone</span>
+          <span><i class="dot dot--drift"></i> Drift zone</span>
+          <span><i class="dot dot--jump"></i> Danger sign</span>
         </div>
       </div>
     </section>
@@ -185,6 +269,29 @@
         <label class="card card--setting">
           <div class="card__title">Speed Units</div>
           <select id="set-units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">AI Difficulty</div>
+          <select id="set-difficulty">
+            <option value="easy">Easy</option><option value="normal">Normal</option>
+            <option value="hard">Hard</option><option value="unbeatable">Unbeatable</option>
+          </select>
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Master Volume</div>
+          <input type="range" id="set-master" min="0" max="100" value="80" />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Music Volume</div>
+          <input type="range" id="set-music" min="0" max="100" value="35" />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Effects Volume</div>
+          <input type="range" id="set-sfx" min="0" max="100" value="80" />
+        </label>
+        <label class="card card--setting">
+          <div class="card__title">Horizon Radio</div>
+          <input type="checkbox" id="set-radio" checked />
         </label>
         <label class="card card--setting">
           <div class="card__title">Bloom</div>
@@ -206,15 +313,17 @@
           <div class="card__title">Resolution Scale</div>
           <select id="set-res"><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select>
         </label>
+        <button class="card card--setting card--danger" data-action="reset-progress">
+          <div class="card__title">Reset Progress</div>
+          <div class="card__sub">Wipe credits, cars &amp; records</div>
+        </button>
         <div class="card card--setting card--controls">
           <div class="card__title">Controls</div>
           <ul class="controls">
-            <li><kbd>W</kbd>/<kbd>↑</kbd> Throttle</li>
-            <li><kbd>S</kbd>/<kbd>↓</kbd> Brake / Reverse</li>
-            <li><kbd>A D</kbd>/<kbd>← →</kbd> Steer</li>
-            <li><kbd>Space</kbd> Handbrake</li>
-            <li><kbd>C</kbd> Camera · <kbd>R</kbd> Reset</li>
-            <li>Gamepad: RT/LT, L-Stick, A handbrake, Start menu</li>
+            <li><kbd>W</kbd>/<kbd>↑</kbd> Throttle · <kbd>S</kbd>/<kbd>↓</kbd> Brake / Reverse</li>
+            <li><kbd>A</kbd> <kbd>D</kbd>/<kbd>←</kbd> <kbd>→</kbd> Steer · <kbd>Space</kbd> Handbrake</li>
+            <li><kbd>C</kbd> Camera · <kbd>R</kbd> Reset · <kbd>M</kbd> Radio · <kbd>Esc</kbd> Menu</li>
+            <li>Gamepad: RT/LT, L-Stick, A handbrake, Y reset, View camera, Start menu</li>
           </ul>
         </div>
       </div>

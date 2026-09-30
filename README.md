@@ -1,13 +1,13 @@
 # Horizon Drive — Sakura Festival
 
-A Forza Horizon–inspired arcade driving prototype built with **Three.js** and
-**Rapier** (`@dimforge/rapier3d-compat`), plus a vanilla HTML/CSS glassmorphic HUD
-and tile-grid menu. There is no build step: ES modules load from a CDN through an
-import map.
+A Forza Horizon–inspired open-world racing game that runs in the browser. It's
+built with **Three.js** and **Rapier** physics, with a vanilla HTML/CSS
+glassmorphic HUD. There is no build step and there are no asset downloads: the
+car, world, textures, sound and music are all generated in code.
 
 ## Run
 
-ES modules need to be served over HTTP (opening `file://` directly won't work):
+ES modules must be served over HTTP; opening `index.html` from `file://` won't work:
 
 ```bash
 npm start                  # npx http-server on http://localhost:8080
@@ -15,73 +15,82 @@ npm start                  # npx http-server on http://localhost:8080
 python3 -m http.server 8080
 ```
 
-The car can be driven as soon as the loader fades out.
+## What's in the game
 
-| Action | Keyboard | Gamepad |
-| --- | --- | --- |
-| Throttle / Brake / Reverse | `W` `S` or `↑` `↓` | RT / LT |
-| Steer | `A` `D` or `←` `→` | Left stick |
-| Handbrake (drift) | `Space` | A |
-| Menu | `Esc` | Start |
-| Switch menu tab | `Q` / `E` | LB / RB (D-pad + A to pick cards) |
-| Camera | `C` | Back / View |
-| Reset to track | `R` | Y |
+- **Festival Loop open world.** A 1.9 km circuit through sakura groves under a
+  Fuji-style mountain, with a start gantry, plaza, ramps and more than 1,200
+  roadside objects. Four AI "Drivatar" cars cruise the loop in free roam.
+- **Races.** *Sakura Circuit* (3 laps) and *Festival Sprint* (1 lap), each
+  against 5 AI rivals. Races have a grid start, countdown, checkpoint gates,
+  live positions, lap timing, a wrong-way warning, a results table and rewards.
+  AI difficulty ranges from Easy to Unbeatable.
+- **Time trial.** *Hanami Time Trial*: your best lap is measured against
+  bronze, silver and gold target times.
+- **Challenges around the map, each rated 1–3 stars:**
+  - 2 speed traps
+  - a speed zone (scored on average speed)
+  - a drift zone
+  - 2 danger-sign jumps
+  Every new star pays credits and XP, and your records are saved.
+- **Skill chains.** Drift, speed, air, clean driving and cone smashes build a
+  chain with a multiplier. A crash breaks the chain; banking it pays out
+  credits and XP.
+- **Progression.** You earn credits and XP, level up for bonus credits, and can
+  buy 5 cars (classes A to X). Each car has engine, tyre and brake upgrades
+  (3 tiers each, which change its performance class) and 8 paint colours.
+  Everything, including settings, is saved automatically in your browser.
+- **Audio, all synthesised live:**
+  - engine sound that follows the RPM, tyre squeal, wind, crashes and landings
+  - UI sounds
+  - *Horizon Pulse*, a generative synthwave radio station (`M` toggles it)
+- **Controls:** keyboard, gamepad (including menu navigation) and on-screen
+  touch buttons for phones and tablets.
+
+## Controls
+
+| Action | Keyboard | Gamepad | Touch |
+| --- | --- | --- | --- |
+| Throttle / Brake / Reverse | `W` `S` or `↑` `↓` | RT / LT | GAS / BRAKE |
+| Steer | `A` `D` or `←` `→` | Left stick | ◀ ▶ |
+| Handbrake (drift) | `Space` | A | HB |
+| Menu | `Esc` | Start | ☰ |
+| Menu tabs / navigate / select | `Q` `E` / mouse | LB RB / D-pad / A | tap |
+| Camera | `C` | View | — |
+| Reset to track | `R` | Y | — |
+| Radio on/off | `M` | — | Settings |
 
 ## Project layout
 
 ```
-├── index.html            HUD + menu markup, import map
-├── styles/ui.css         Glassmorphic HUD, tachometer, skill popups, tile menu
-├── assets/               Optional car.glb (procedural fallback otherwise)
+├── index.html               Title, HUD, results, menu markup, import map
+├── styles/ui.css            Glassmorphic HUD, race panel, stunt banners, tile menu, touch
+├── assets/                  Optional car.glb (procedural car otherwise)
 └── src/
-    ├── main.js           Bootstrap, frame loop, GAMEPLAY ⇄ MENU state, skill chain
-    ├── PhysicsWorld.js   Rapier init, 60 Hz fixed-step accumulator, collision groups,
-    │                     ray casts; built-in "lite" solver fallback
-    ├── Vehicle.js        Raycast vehicle, gearbox, tyres, input, procedural car, GLTF swap
-    ├── CameraController.js  Spring-damped chase, speed FOV, look-ahead, showroom orbit
-    ├── Environment.js    Track spline, procedural asphalt maps, instanced scenery, lighting
-    ├── UI.js             HUD updates, minimap/world map canvases, menu tabs & navigation
-    └── Shaders.js        Sky, ground, taillight glow, petals, speed blur, post pipeline
+    ├── main.js              Boot, frame loop, TITLE/GAMEPLAY/MENU/RESULTS states, skill chains
+    ├── PhysicsWorld.js      Rapier, 60 Hz fixed step, collision groups, ramps; lite fallback solver
+    ├── Vehicle.js           Raycast vehicle, gearbox, tyres, input, car roster, upgrades, PI classes
+    ├── AIDriver.js          Pure-pursuit AI: corner speed planning, avoidance, stuck recovery
+    ├── Events.js            Races / time trial, PR stunts, free-roam traffic
+    ├── Progression.js       Save file: credits, XP/levels, garage, records, settings
+    ├── Audio.js             Procedural Web Audio engine/sfx + generative radio
+    ├── CameraController.js  Spring chase cam, speed FOV, look-ahead, showroom orbit
+    ├── Environment.js       Track spline, asphalt maps, instanced scenery, gates, stunts, lighting
+    ├── UI.js                HUD, minimap/world map, menus, garage shop, results, touch
+    └── Shaders.js           Sky, ground, taillight glow, petals, speed blur, bloom pipeline
 ```
 
-## Highlights
+## Technical notes
 
 - **Physics.** Rapier WASM steps on a fixed 60 Hz accumulator with render
-  interpolation. The collision groups are `STATIC_GEOMETRY`, `VEHICLE_BODY`,
-  `WHEELS` (suspension rays) and `PROPS` (knock-over cones). If Rapier can't load,
-  a small built-in rigid-body solver takes over, so the game is always drivable.
-- **Vehicle.**
-  - Four suspension rays with spring stiffness, separate bump and rebound
-    damping, rest length, a bump stop and anti-roll bars.
-  - The engine uses a torque curve with top-speed falloff, a 6-speed automatic
-    gearbox with shift cuts, and reverse.
-  - Steering angle scales down as speed rises. Tyres use a friction circle.
-  - The handbrake collapses rear lateral grip, and a drift assist holds the
-    slide at a controllable angle.
-- **Camera.** A critically-damped spring follows the car. Yaw blends the car's
-  heading with its velocity, so drifts are framed from the outside. FOV goes
-  from 60° to 85° with speed, and the camera adds steering look-ahead, pitch and
-  roll from acceleration, a high-speed rumble and shake on impacts.
-- **World.**
-  - A 1.9 km closed spline circuit with procedurally generated asphalt colour,
-    roughness and normal maps, plus curbs and a start plaza.
-  - More than 1,200 instanced objects: pines, sakura trees, street lights and
-    barriers on the outside of corners, all with static colliders.
-  - Low-poly mountains, including a Fuji-style peak.
-  - Soft shadow maps from a sun light that follows the car, ACES filmic tone
-    mapping, and an environment map rebuilt from the dynamic sky.
-- **Effects.**
-  - A gradient sky shader with sun disk and clouds, and a noise-based ground shader.
-  - GPU-animated falling petals.
-  - Taillight lenses and additive glow that brighten with brake input, plus
-    reverse lights.
-  - Post-processing: `UnrealBloomPass` and a speed-dependent radial blur with vignette.
-- **HUD and menu.**
-  - SVG tachometer with a conic-gradient glow, digital speed readout, gear
-    indicator and a rotating minimap.
-  - Skill-chain popups: DRIFT, SPEED SKILL, CLEAN DRIVING, AIR and CONE SMASH,
-    with a multiplier and banking.
-  - The `Esc` menu has FESTIVAL, GARAGE (3 cars, 8 paints), MAP and SETTINGS
-    (units, bloom, blur, shadows, time of day, resolution) tabs.
+  interpolation. The collision groups are `STATIC_GEOMETRY`, `VEHICLE_BODY`
+  (cars collide with each other), `WHEELS` (suspension rays) and `PROPS` (cones).
+  If Rapier can't load, a built-in lite solver keeps the game playable. It
+  supports ramps but not car-to-car contact.
+- **AI cars** use the same vehicle physics as the player. Their inputs come from
+  a driver model that plans cornering speeds from the upcoming curvature
+  (`v = √(μg/k)`) with a braking envelope, and applies mild catch-up so races
+  stay close.
+- **Optional car model.** Drop a glTF at `assets/car.glb` to replace the
+  player's procedural car body.
 
-`window.__horizon` exposes the running app in the console for debugging.
+`window.__horizon` exposes the running app in the browser console for debugging.

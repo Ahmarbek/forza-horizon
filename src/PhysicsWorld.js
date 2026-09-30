@@ -117,6 +117,42 @@ export class PhysicsWorld {
     }
   }
 
+  /**
+   * Static wedge ramp. `def` = { x, z, yaw, width, length, height }.
+   * The ramp rises along its local +Z from 0 to `height` over `length`.
+   */
+  addRamp(def) {
+    if (this.backend === 'rapier') {
+      const R = this.RAPIER;
+      const { width: w, length: l, height: h } = def;
+      const hw = w / 2;
+      const pts = new Float32Array([
+        -hw, 0, 0, hw, 0, 0, -hw, 0, l, hw, 0, l, -hw, h, l, hw, h, l,
+      ]);
+      _q1.setFromAxisAngle(_v1.set(0, 1, 0), def.yaw);
+      const body = this.world.createRigidBody(
+        R.RigidBodyDesc.fixed()
+          .setTranslation(def.x, 0, def.z)
+          .setRotation({ x: _q1.x, y: _q1.y, z: _q1.z, w: _q1.w })
+      );
+      const desc = R.ColliderDesc.convexHull(pts)
+        .setFriction(0.9)
+        .setCollisionGroups(interactionGroups(GROUPS.STATIC_GEOMETRY, GROUPS.ALL));
+      this.world.createCollider(desc, body);
+    } else {
+      this.lite.addRamp(def);
+    }
+  }
+
+  /** Remove a dynamic body created by this world. */
+  removeBody(body) {
+    if (this.backend === 'rapier') this.world.removeRigidBody(body);
+    else {
+      const i = this.lite.bodies.indexOf(body);
+      if (i >= 0) this.lite.bodies.splice(i, 1);
+    }
+  }
+
   /** Static vertical cylinder (tree trunks, lamp posts). */
   addStaticCylinder(position, radius, halfHeight) {
     if (this.backend === 'rapier') {
@@ -163,7 +199,7 @@ export class PhysicsWorld {
         .setFriction(0.3)
         .setRestitution(0.05)
         .setCollisionGroups(
-          interactionGroups(GROUPS.VEHICLE_BODY, GROUPS.STATIC_GEOMETRY | GROUPS.PROPS)
+          interactionGroups(GROUPS.VEHICLE_BODY, GROUPS.STATIC_GEOMETRY | GROUPS.PROPS | GROUPS.VEHICLE_BODY)
         );
       this.world.createCollider(desc, body);
       return body;
@@ -319,6 +355,7 @@ class LiteSolver {
     this.groundY = 0;
     this.bodies = [];
     this.statics = []; // { center, half, cos, sin }
+    this.ramps = []; // { x, z, cos, sin, hw, l, h }
     this._corners = Array.from({ length: 8 }, () => new THREE.Vector3());
   }
 
@@ -337,16 +374,51 @@ class LiteSolver {
     });
   }
 
+  addRamp(def) {
+    this.ramps.push({
+      x: def.x, z: def.z, cos: Math.cos(def.yaw), sin: Math.sin(def.yaw),
+      hw: def.width / 2, l: def.length, h: def.height,
+    });
+  }
+
+  /** Ground height (plane + ramps) at x,z; writes the surface normal. */
+  heightAt(x, z, normal) {
+    let best = this.groundY;
+    if (normal) normal.set(0, 1, 0);
+    for (let i = 0; i < this.ramps.length; i++) {
+      const r = this.ramps[i];
+      const dx = x - r.x, dz = z - r.z;
+      const lx = r.cos * dx - r.sin * dz, lz = r.sin * dx + r.cos * dz;
+      if (lx < -r.hw || lx > r.hw || lz < 0 || lz > r.l) continue;
+      const hy = (lz / r.l) * r.h;
+      if (hy > best) {
+        best = hy;
+        if (normal) {
+          // local normal (0, l, -h) normalised, rotated back to world
+          const inv = 1 / Math.hypot(r.l, r.h);
+          const nz = -r.h * inv;
+          normal.set(r.sin * nz, r.l * inv, r.cos * nz);
+        }
+      }
+    }
+    return best;
+  }
+
   castRay(origin, dir, maxDist, out) {
     out.hit = false;
     let best = maxDist;
-    // Ground plane
+    // Ground plane + ramps (height field). Rays are near-vertical, so a few
+    // fixed-point iterations on the height are enough.
     if (dir.y < -1e-6) {
-      const t = (this.groundY - origin.y) / dir.y;
+      let t = (this.groundY - origin.y) / dir.y;
+      for (let it = 0; it < 4; it++) {
+        const h = this.heightAt(origin.x + dir.x * t, origin.z + dir.z * t, null);
+        t = (h - origin.y) / dir.y;
+      }
       if (t >= 0 && t < best) {
         best = t;
         out.hit = true;
-        out.normal.set(0, 1, 0);
+        this.heightAt(origin.x + dir.x * t, origin.z + dir.z * t, out.normal);
       }
     }
     // Static OBBs (slab test in box-local frame)
@@ -438,8 +510,8 @@ class LiteSolver {
         for (let sz = -1; sz <= 1; sz += 2)
           c[i++].set(sx * b.half.x, sy * b.half.y, sz * b.half.z).applyQuaternion(b.q).add(b.p);
     for (let k = 0; k < 8; k++) {
-      const depth = this.groundY - c[k].y;
-      if (depth > 0) this._contact(b, c[k], _upN, depth, 0.6, 0.0);
+      const depth = this.heightAt(c[k].x, c[k].z, _gN) - c[k].y;
+      if (depth > 0) this._contact(b, c[k], _gN, depth * _gN.y, 0.6, 0.0);
     }
   }
 
@@ -468,7 +540,7 @@ class LiteSolver {
   }
 }
 
-const _upN = new THREE.Vector3(0, 1, 0);
+const _gN = new THREE.Vector3(0, 1, 0);
 const _sphere = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _cp = new THREE.Vector3();

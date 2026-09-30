@@ -22,7 +22,7 @@ export const CAR_PRESETS = [
   {
     id: 'sakura-gt',
     name: 'Sakura GT',
-    klass: 'A 800',
+    price: 0,
     drive: 'RWD',
     color: '#c9ccd4',
     mass: 1400,
@@ -38,7 +38,7 @@ export const CAR_PRESETS = [
   {
     id: 'volta-r',
     name: 'Volta R',
-    klass: 'S1 900',
+    price: 120000,
     drive: 'AWD',
     color: '#c25a1d',
     mass: 1550,
@@ -54,7 +54,7 @@ export const CAR_PRESETS = [
   {
     id: 'kaze-drift',
     name: 'Kaze Drift',
-    klass: 'B 700',
+    price: 45000,
     drive: 'RWD',
     color: '#ff2d8f',
     mass: 1250,
@@ -67,7 +67,71 @@ export const CAR_PRESETS = [
     springK: 27000,
     stats: { speed: 0.66, handling: 0.9, accel: 0.7, launch: 0.55 },
   },
+  {
+    id: 'yama-rally',
+    name: 'Yama Rally',
+    price: 70000,
+    drive: 'AWD',
+    color: '#1f6feb',
+    mass: 1330,
+    engineForce: 11200,
+    topSpeed: 70,
+    brakeForce: 16500,
+    maxSteer: 0.64,
+    gripFront: 1.3,
+    gripRear: 1.25,
+    springK: 26000,
+    stats: { speed: 0.72, handling: 0.86, accel: 0.84, launch: 0.9 },
+  },
+  {
+    id: 'tenshi-x',
+    name: 'Tenshi X',
+    price: 250000,
+    drive: 'AWD',
+    color: '#f4f4f4',
+    mass: 1420,
+    engineForce: 17500,
+    topSpeed: 98,
+    brakeForce: 21000,
+    maxSteer: 0.5,
+    gripFront: 1.45,
+    gripRear: 1.42,
+    springK: 40000,
+    stats: { speed: 1.0, handling: 0.9, accel: 1.0, launch: 0.95 },
+  },
 ];
+
+// ============================================================================
+// Upgrades & performance index
+// ============================================================================
+export const UPGRADE_TYPES = {
+  engine: { label: 'Engine', costs: [8000, 18000, 35000] },
+  grip: { label: 'Tyres', costs: [6000, 14000, 28000] },
+  brakes: { label: 'Brakes', costs: [4000, 9000, 18000] },
+};
+
+/** Returns a copy of `base` with upgrade tiers (0-3) applied. */
+export function tunePreset(base, up = {}) {
+  const e = up.engine || 0, g = up.grip || 0, b = up.brakes || 0;
+  return {
+    ...base,
+    engineForce: base.engineForce * (1 + 0.09 * e),
+    topSpeed: base.topSpeed * (1 + 0.035 * e),
+    gripFront: base.gripFront * (1 + 0.06 * g),
+    gripRear: base.gripRear * (1 + 0.06 * g),
+    brakeForce: base.brakeForce * (1 + 0.12 * b),
+    upgrades: { engine: e, grip: g, brakes: b },
+  };
+}
+
+/** Forza-style performance index + class letter. */
+export function performanceIndex(p) {
+  const raw = p.topSpeed * 4 + (p.engineForce / p.mass) * 30
+    + ((p.gripFront + p.gripRear) / 2) * 120 + (p.brakeForce / p.mass) * 4;
+  const pi = Math.round(THREE.MathUtils.clamp(800 + (raw - 721.6) * 0.82, 100, 999));
+  const klass = pi <= 500 ? 'D' : pi <= 600 ? 'C' : pi <= 700 ? 'B' : pi <= 800 ? 'A' : pi <= 900 ? 'S1' : pi <= 998 ? 'S2' : 'X';
+  return { pi, klass, label: `${klass} ${pi}` };
+}
 
 export const PAINT_COLORS = ['#c9ccd4', '#c25a1d', '#ff2d8f', '#1f6feb', '#ffd23f', '#1b1d22', '#f4f4f4', '#27c485'];
 
@@ -134,7 +198,8 @@ export class InputController {
     this.enabled = true;
 
     // edge-triggered actions (consumed by main loop)
-    this.actions = { menu: false, camera: false, reset: false, tabLeft: false, tabRight: false,
+    this.touch = null; // optional on-screen controls state (see UI)
+    this.actions = { menu: false, camera: false, reset: false, radio: false, tabLeft: false, tabRight: false,
       navUp: false, navDown: false, navLeft: false, navRight: false, confirm: false, back: false };
     this._prevButtons = [];
 
@@ -144,6 +209,7 @@ export class InputController {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
       if (e.code === 'KeyC') this.actions.camera = true;
       if (e.code === 'KeyR') this.actions.reset = true;
+      if (e.code === 'KeyM') this.actions.radio = true;
       this.usingGamepad = false;
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
@@ -165,6 +231,14 @@ export class InputController {
     let kBrake = k.has('KeyS') || k.has('ArrowDown') ? 1 : 0;
     let kSteer = (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0) - (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0);
     let kHand = k.has('Space');
+    const t = this.touch;
+    if (t && t.active) {
+      if (t.throttle) kThrottle = 1;
+      if (t.brake) kBrake = 1;
+      if (t.handbrake) kHand = true;
+      kSteer += (t.left ? 1 : 0) - (t.right ? 1 : 0);
+      kSteer = Math.max(-1, Math.min(1, kSteer));
+    }
 
     // --- Gamepad
     let gp = null;
@@ -227,10 +301,16 @@ export class InputController {
 // Vehicle
 // ============================================================================
 export class Vehicle {
-  constructor(scene, physics, preset = CAR_PRESETS[0]) {
+  /**
+   * @param {object} options { loadModel: bool, name: string }
+   */
+  constructor(scene, physics, preset = CAR_PRESETS[0], options = {}) {
     this.scene = scene;
     this.physics = physics;
     this.preset = { ...preset };
+    this.name = options.name ?? preset.name;
+    this.isPlayer = options.loadModel !== false;
+    this.skid = 0; // 0..1 tyre scrub amount (audio / smoke)
 
     this.root = new THREE.Group();
     this.root.name = 'Vehicle';
@@ -254,6 +334,7 @@ export class Vehicle {
     this.airTime = 0;
     this.lastImpact = 0; // m/s delta-v of last collision
     this.impactEvent = 0;
+    this.landEvent = 0;
     this.longAccel = 0;
     this.latAccel = 0;
     this.shiftEvent = false;
@@ -295,7 +376,16 @@ export class Vehicle {
 
     this._buildProceduralModel();
     this._createBody();
-    this._tryLoadModel(MODEL_URL);
+    if (this.isPlayer) this._tryLoadModel(MODEL_URL);
+  }
+
+  /** Remove from scene and physics world (AI cars between events). */
+  dispose() {
+    this.physics.removeBody(this.body);
+    this.scene.remove(this.root);
+    this.root.traverse((o) => {
+      if (o.isMesh) o.geometry.dispose();
+    });
   }
 
   // -------------------------------------------------------------- Physics body
@@ -311,21 +401,21 @@ export class Vehicle {
     });
   }
 
-  applyPreset(preset) {
+  applyPreset(preset, paint) {
     const color = this.paintMaterial.color.getHexString();
     this.preset = { ...preset };
+    this.name = preset.name;
     // Mass changes need a new body; keep the current transform.
     const t = this.body.translation();
     const r = this.body.rotation();
     const pos = new THREE.Vector3(t.x, t.y + 0.3, t.z);
     const quat = new THREE.Quaternion(r.x, r.y, r.z, r.w);
-    if (this.physics.backend === 'rapier') this.physics.world.removeRigidBody(this.body);
-    else this.physics.lite.bodies.splice(this.physics.lite.bodies.indexOf(this.body), 1);
+    this.physics.removeBody(this.body);
     this._createBody();
     this.body.setTranslation(pos, true);
     this.body.setRotation(quat, true);
     this._syncPoseImmediate();
-    this.setPaint(preset.color ?? '#' + color);
+    this.setPaint(paint ?? preset.color ?? '#' + color);
   }
 
   setPaint(hex) {
@@ -386,10 +476,14 @@ export class Vehicle {
 
     // ---- Collision detection via unexpected velocity change (backend agnostic)
     if (this._hasExpected) {
-      const dv = _tmp.subVectors(_lv, this._expectedVel).length();
+      // Horizontal-only: landing a jump is not a crash (reported separately)
+      _tmp.subVectors(_lv, this._expectedVel);
+      const dv = Math.hypot(_tmp.x, _tmp.z);
       if (dv > 3.2) {
         this.lastImpact = dv;
         this.impactEvent = dv;
+      } else if (_tmp.y > 5) {
+        this.landEvent = _tmp.y;
       }
     }
 
@@ -498,6 +592,7 @@ export class Vehicle {
 
     // ---- Tyres
     let rearSlip = 0;
+    let scrub = 0;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
       // wheel frame
@@ -530,6 +625,7 @@ export class Vehicle {
       let latStiff = w.front ? 0.9 : 0.85;
       const slipAngle = Math.atan2(Math.abs(vLat), Math.abs(vLong) + 0.5);
       w.slip = slipAngle;
+      scrub = Math.max(scrub, Math.abs(vLat) - 1.2);
       if (!w.front) {
         rearSlip = Math.max(rearSlip, slipAngle);
         if (this.handbrake) { mu *= 0.42; latStiff = 0.12; }
@@ -640,6 +736,12 @@ export class Vehicle {
     } else this.driftAngle = 0;
     this.isDrifting = grounded >= 2 && planarSpeed > 8 && Math.abs(this.driftAngle) > 0.26 && vFwd > 0;
     this.rearSlip = rearSlip;
+    // Tyre scrub for audio: lateral sliding, handbrake lock or launch wheelspin
+    let skid = clamp(scrub / 6, 0, 1);
+    if (this.handbrake && Math.abs(vFwd) > 3) skid = Math.max(skid, 0.7);
+    if (driveInput > 0.8 && Math.abs(vFwd) < 7 && grounded >= 3 && P.drive !== 'AWD') skid = Math.max(skid, 0.5 * driveInput);
+    if (brakeInput > 0.8 && Math.abs(vFwd) > 12) skid = Math.max(skid, 0.35);
+    this.skid = grounded ? skid : 0;
 
     // Expected velocity after this step (for collision detection next step)
     const nlv = body.linvel();

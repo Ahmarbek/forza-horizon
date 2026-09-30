@@ -66,6 +66,7 @@ export class Environment {
     this.cones = []; // { body, mesh index, home }
     this.coneMesh = null;
     this.bounds = { minX: -600, maxX: 800, minZ: -700, maxZ: 600 };
+    this.mapBounds = { minX: -320, maxX: 520, minZ: -420, maxZ: 320 };
 
     this.startPosition = new THREE.Vector3(0, 1.2, -75);
     this.startYaw = 0; // facing +Z along the start straight
@@ -81,11 +82,14 @@ export class Environment {
     this._buildPlaza();
     this._buildGantry();
     this._buildMountains();
+    this._buildRamps();
     this._buildTrees();
     this._buildStreetLights();
     this._buildBarriers();
     this._buildCones();
     this._buildPetals();
+    this._buildRaceFurniture();
+    this._buildStunts();
     this.setTimeOfDay(38);
     return this;
   }
@@ -290,6 +294,53 @@ export class Environment {
       if (d < best) best = d;
     }
     return Math.sqrt(best);
+  }
+
+  /** Areas kept free of trees (ramp run-ups and landings). */
+  inClearZone(x, z) {
+    for (const c of this.clearZones) {
+      const dx = x - c.x, dz = z - c.z;
+      const lx = c.cos * dx - c.sin * dz, lz = c.sin * dx + c.cos * dz;
+      if (Math.abs(lx) < c.hw && lz > c.z0 && lz < c.z1) return true;
+    }
+    return false;
+  }
+
+  /** Nearest track sample index; searches around `hint` when given. */
+  nearestIndex(x, z, hint = -1, window = 40) {
+    const s = this.trackPoints2D;
+    const n = s.length / 2;
+    let best = 0, bestD = Infinity;
+    if (hint < 0) {
+      for (let i = 0; i < n; i++) {
+        const dx = s[i * 2] - x, dz = s[i * 2 + 1] - z;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    }
+    for (let k = -window; k <= window; k++) {
+      const i = (hint + k + n) % n;
+      const dx = s[i * 2] - x, dz = s[i * 2 + 1] - z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    // Far from the hinted section (e.g. after a reset): do a full search.
+    return bestD > 900 ? this.nearestIndex(x, z, -1) : best;
+  }
+
+  /** Point on the track at sample `index` offset `lateral` metres to the left. */
+  trackPoint(index, lateral, out) {
+    const n = this.trackSamples.length;
+    const i = ((Math.round(index) % n) + n) % n;
+    const p = this.trackSamples[i], t = this.trackTangents[i];
+    return out.set(p.x + t.z * lateral, 0, p.z - t.x * lateral);
+  }
+
+  trackYaw(index) {
+    const n = this.trackSamples.length;
+    const t = this.trackTangents[((Math.round(index) % n) + n) % n];
+    return Math.atan2(t.x, t.z);
   }
 
   inPlaza(x, z, margin = 0) {
@@ -516,7 +567,7 @@ export class Environment {
           x = THREE.MathUtils.lerp(this.bounds.minX, this.bounds.maxX, rng());
           z = THREE.MathUtils.lerp(this.bounds.minZ, this.bounds.maxZ, rng());
         }
-        if (this.inPlaza(x, z, 8)) continue;
+        if (this.inPlaza(x, z, 8) || this.inClearZone(x, z)) continue;
         if (this.distanceToTrack(x, z) < ROAD_WIDTH / 2 + 5) continue;
         list.push({ x, z, s: 0.8 + rng() * 0.6, r: rng() * Math.PI * 2 });
       }
@@ -739,6 +790,199 @@ export class Environment {
     this.scene.add(this.petals);
   }
 
+  // ----------------------------------------------------------------- Ramps
+  _buildRamps() {
+    this.clearZones = [];
+    this.ramps = [
+      { id: 'ramp-west', name: 'Sakura Leap', x: -130, z: -170, yaw: 0, width: 9, length: 15, height: 3.4 },
+      { id: 'ramp-north', name: 'Fuji Sky Jump', x: -250, z: 70, yaw: Math.PI / 2, width: 9, length: 16, height: 4.2 },
+    ];
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = '#16181f';
+    for (let y = -128; y < 128; y += 64) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + 64); ctx.lineTo(64, y); ctx.lineTo(128, y + 64);
+      ctx.lineTo(128, y + 96); ctx.lineTo(64, y + 32); ctx.lineTo(0, y + 96);
+      ctx.closePath(); ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    const topMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0x3a3d45, roughness: 0.8, metalness: 0.3 });
+
+    for (const r of this.ramps) {
+      const hw = r.width / 2, l = r.length, h = r.height;
+      // Wedge: slope (top), two triangular sides, back face
+      const g = new THREE.BufferGeometry();
+      const v = [
+        // slope
+        -hw, 0, 0, hw, 0, 0, hw, h, l, -hw, 0, 0, hw, h, l, -hw, h, l,
+        // back
+        -hw, 0, l, -hw, h, l, hw, h, l, -hw, 0, l, hw, h, l, hw, 0, l,
+        // sides
+        hw, 0, 0, hw, 0, l, hw, h, l,
+        -hw, 0, 0, -hw, h, l, -hw, 0, l,
+      ];
+      const uv = [0, 0, 1, 0, 1, l / 4, 0, 0, 1, l / 4, 0, l / 4, ...new Array(24).fill(0)];
+      // Flip winding (listed clockwise above) so faces point outward
+      for (let t = 0; t < v.length / 9; t++) {
+        for (let k = 0; k < 3; k++) {
+          const i1 = t * 9 + 3 + k, i2 = t * 9 + 6 + k;
+          [v[i1], v[i2]] = [v[i2], v[i1]];
+        }
+        const u1 = t * 6 + 2, u2 = t * 6 + 4;
+        [uv[u1], uv[u2]] = [uv[u2], uv[u1]];
+        [uv[u1 + 1], uv[u2 + 1]] = [uv[u2 + 1], uv[u1 + 1]];
+      }
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      g.addGroup(0, 6, 0);
+      g.addGroup(6, 12, 1);
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, [topMat, sideMat]);
+      mesh.position.set(r.x, 0.01, r.z);
+      mesh.rotation.y = r.yaw;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.physics.addRamp(r);
+
+      // Danger sign board beside the run-up
+      const sign = makeSignMesh('DANGER SIGN', r.name, '#ffd23f', '#16181f');
+      const side = new THREE.Vector3(Math.cos(r.yaw), 0, -Math.sin(r.yaw));
+      const fwd = new THREE.Vector3(Math.sin(r.yaw), 0, Math.cos(r.yaw));
+      sign.position.set(r.x, 0, r.z).addScaledVector(side, hw + 4).addScaledVector(fwd, -12);
+      sign.rotation.y = r.yaw + Math.PI;
+      this.scene.add(sign);
+
+      this.clearZones.push({ x: r.x, z: r.z, cos: Math.cos(r.yaw), sin: Math.sin(r.yaw), hw: 22, z0: -110, z1: 120 });
+    }
+  }
+
+  // --------------------------------------------------- Race gates & grid
+  _buildRaceFurniture() {
+    const n = this.trackSamples.length;
+    this.sampleSpacing = this.trackLength / n;
+    this.startIndex = this.nearestIndex(0, -30);
+
+    // Chequered start/finish strip under the gantry
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 32;
+    const ctx = c.getContext('2d');
+    for (let x = 0; x < 16; x++) for (let y = 0; y < 2; y++) {
+      ctx.fillStyle = (x + y) % 2 ? '#111' : '#f4f4f4';
+      ctx.fillRect(x * 16, y * 16, 16, 16);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    const strip = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROAD_WIDTH, 1.6).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 })
+    );
+    const sp = this.trackSamples[this.startIndex];
+    strip.position.set(sp.x, 0.035, sp.z);
+    strip.rotation.y = this.trackYaw(this.startIndex);
+    strip.receiveShadow = true;
+    this.scene.add(strip);
+
+    // Checkpoint arches (shown during events only)
+    this.checkpointGroup = new THREE.Group();
+    this.checkpointGroup.visible = false;
+    this.scene.add(this.checkpointGroup);
+    this.gateMatIdle = new THREE.MeshStandardMaterial({ color: 0x222633, emissive: 0x2de2ff, emissiveIntensity: 0.6, roughness: 0.4 });
+    this.gateMatNext = new THREE.MeshStandardMaterial({ color: 0x222633, emissive: 0xffd23f, emissiveIntensity: 3.5, roughness: 0.4 });
+    this.gateMatFinish = new THREE.MeshStandardMaterial({ color: 0x222633, emissive: 0xff2d8f, emissiveIntensity: 3.5, roughness: 0.4 });
+    this.gates = [];
+  }
+
+  /** Show checkpoint gates at the given sample indices. */
+  showCheckpoints(indices) {
+    for (const g of this.gates) this.checkpointGroup.remove(g.mesh);
+    this.gates = [];
+    const postGeo = new THREE.BoxGeometry(0.5, 7, 0.5);
+    const beamGeo = new THREE.BoxGeometry(ROAD_WIDTH + 4, 0.5, 0.5);
+    for (const idx of indices) {
+      const grp = new THREE.Group();
+      const p = this.trackSamples[idx];
+      grp.position.set(p.x, 0, p.z);
+      grp.rotation.y = this.trackYaw(idx);
+      const a = new THREE.Mesh(postGeo, this.gateMatIdle);
+      a.position.set(ROAD_WIDTH / 2 + 2, 3.5, 0);
+      const b = a.clone();
+      b.position.x = -a.position.x;
+      const beam = new THREE.Mesh(beamGeo, this.gateMatIdle);
+      beam.position.y = 7;
+      grp.add(a, b, beam);
+      this.checkpointGroup.add(grp);
+      this.gates.push({ index: idx, mesh: grp, parts: [a, b, beam] });
+    }
+    this.checkpointGroup.visible = indices.length > 0;
+  }
+
+  /** Highlight gate `i` as next (and optionally as the finish). */
+  setActiveCheckpoint(i, isFinish = false) {
+    this.gates.forEach((g, k) => {
+      const m = k === i ? (isFinish ? this.gateMatFinish : this.gateMatNext) : this.gateMatIdle;
+      g.parts.forEach((p) => (p.material = m));
+      g.mesh.visible = k === i || k === (i + 1) % this.gates.length;
+    });
+  }
+
+  hideCheckpoints() {
+    this.showCheckpoints([]);
+  }
+
+  /** Starting-grid slot k (0 = pole): position + yaw behind the start line. */
+  gridSlot(k, out) {
+    const back = 10 + Math.floor(k / 2) * 9;
+    const idx = this.startIndex - back / this.sampleSpacing;
+    const lateral = k % 2 === 0 ? 3.2 : -3.2;
+    this.trackPoint(idx, lateral, out);
+    out.y = 1.0;
+    return this.trackYaw(idx);
+  }
+
+  // ---------------------------------------------------------------- Stunts
+  _buildStunts() {
+    const idx = (x, z) => this.nearestIndex(x, z);
+    this.stunts = [
+      { id: 'trap-gantry', type: 'trap', name: 'Gantry Speed Trap', index: idx(0, 25), stars: [90, 115, 135] },
+      { id: 'trap-east', type: 'trap', name: 'Riverside Trap', index: idx(320, 90), stars: [75, 95, 115] },
+      { id: 'zone-lakeside', type: 'zone', name: 'Lakeside Speed Zone', index: idx(250, 240), end: idx(300, 40), stars: [70, 90, 105] },
+      { id: 'drift-temple', type: 'drift', name: 'Temple Drift Zone', index: idx(150, -250), end: idx(-10, -260), stars: [6000, 14000, 25000] },
+    ];
+    for (const r of this.ramps) {
+      this.stunts.push({ id: r.id, type: 'jump', name: r.name, ramp: r, stars: [40, 70, 100] });
+    }
+
+    const colors = { trap: '#2de2ff', zone: '#2de2ff', drift: '#b36bff', jump: '#ffd23f' };
+    const labels = { trap: 'SPEED TRAP', zone: 'SPEED ZONE', drift: 'DRIFT ZONE' };
+    for (const st of this.stunts) {
+      if (st.type === 'jump') continue;
+      const col = colors[st.type];
+      const lineMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55, depthWrite: false });
+      const addLine = (i) => {
+        const p = this.trackSamples[i];
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH, 0.8).rotateX(-Math.PI / 2), lineMat);
+        m.position.set(p.x, 0.04, p.z);
+        m.rotation.y = this.trackYaw(i);
+        this.scene.add(m);
+      };
+      addLine(st.index);
+      if (st.end != null) addLine(st.end);
+      const sign = makeSignMesh(labels[st.type], st.name, col, '#0b0d14');
+      this.trackPoint(st.index - 12 / this.sampleSpacing, -(ROAD_WIDTH / 2 + 4), sign.position);
+      sign.rotation.y = this.trackYaw(st.index) + Math.PI;
+      this.scene.add(sign);
+    }
+  }
+
   // ---------------------------------------------------------------- Update
   /** Returns number of cones knocked this frame. */
   update(dt, focus, camera) {
@@ -754,6 +998,11 @@ export class Environment {
     pu.uTime.value = this.time;
     pu.uCenter.value.copy(camera.position);
 
+    if (this.gates.length) {
+      const pulse = 2.5 + Math.sin(this.time * 6) * 1.2;
+      this.gateMatNext.emissiveIntensity = pulse;
+      this.gateMatFinish.emissiveIntensity = pulse;
+    }
     return this._syncCones();
   }
 }
@@ -884,6 +1133,43 @@ function createAsphaltMaps(renderer) {
     roughness: wrap(roughC, false),
     normal: wrap(normC, false),
   };
+}
+
+/** Roadside billboard: two posts + a canvas-textured panel facing -Z. */
+function makeSignMesh(title, subtitle, bg, fg) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 512, 256);
+  ctx.fillStyle = fg;
+  ctx.fillRect(12, 12, 488, 232);
+  ctx.fillStyle = bg;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'italic 800 76px "Barlow Condensed", "Arial Narrow", sans-serif';
+  ctx.fillText(title, 256, 100, 460);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 40px "Barlow Condensed", "Arial Narrow", sans-serif';
+  ctx.fillText(subtitle.toUpperCase(), 256, 180, 460);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const grp = new THREE.Group();
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(6, 3),
+    new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.6, side: THREE.DoubleSide })
+  );
+  panel.position.y = 5;
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x555a63, metalness: 0.6, roughness: 0.4 });
+  const postGeo = new THREE.CylinderGeometry(0.1, 0.1, 5, 8).translate(0, 2.5, 0);
+  const a = new THREE.Mesh(postGeo, postMat);
+  a.position.x = 2.4;
+  const b = new THREE.Mesh(postGeo, postMat);
+  b.position.x = -2.4;
+  grp.add(panel, a, b);
+  grp.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return grp;
 }
 
 function createCurbTexture() {

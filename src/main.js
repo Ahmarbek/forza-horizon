@@ -1,33 +1,43 @@
 import * as THREE from 'three';
 import { PhysicsWorld } from './PhysicsWorld.js';
 import { Environment } from './Environment.js';
-import { Vehicle, InputController } from './Vehicle.js';
+import { Vehicle, InputController, CAR_PRESETS } from './Vehicle.js';
 import { CameraController } from './CameraController.js';
 import { UI } from './UI.js';
 import { createPostProcessing, createSkyMaterial } from './Shaders.js';
+import { AudioSystem } from './Audio.js';
+import { Progression } from './Progression.js';
+import { EventManager, StuntManager, AmbientTraffic, EVENTS } from './Events.js';
 
 /**
  * main.js
  * -------
- * Application lifecycle: bootstrap renderer/physics/world, run the frame loop,
- * and manage the GAMEPLAY ⇄ MENU state machine. Also hosts the Horizon-style
- * skill chain scoring system.
+ * Application lifecycle: bootstrap renderer/physics/world, run the frame loop
+ * and manage the LOADING → TITLE → GAMEPLAY ⇄ MENU / RESULTS state machine.
+ * Also hosts the Horizon-style skill chain scoring.
  */
 
-export const STATE = Object.freeze({ LOADING: 'LOADING', GAMEPLAY: 'GAMEPLAY', MENU: 'MENU' });
+export const STATE = Object.freeze({
+  LOADING: 'LOADING', TITLE: 'TITLE', GAMEPLAY: 'GAMEPLAY', MENU: 'MENU', RESULTS: 'RESULTS',
+});
+
+const FROZEN_INPUT = Object.freeze({ throttle: 0, brake: 1, steer: 0, handbrake: true });
+const IDLE_INPUT = Object.freeze({ throttle: 0, brake: 0.4, steer: 0, handbrake: false });
 
 // ============================================================================
 // Skill chain system
 // ============================================================================
 class SkillSystem {
-  constructor(ui) {
+  constructor(ui, audio, progression) {
     this.ui = ui;
+    this.audio = audio;
+    this.progression = progression;
     this.chainScore = 0;
     this.chainMult = 1;
     this.chainTimer = 0;
     this.chainActive = false;
-    this.total = 0;
-    this.stats = { total: 0, bestChain: 0, longestDrift: 0, topSpeed: 0 };
+    this.total = 0; // this session
+    this.stats = { bestChain: 0, longestDrift: 0, topSpeed: 0 };
 
     this.driftPoints = 0;
     this.driftDistance = 0;
@@ -41,6 +51,7 @@ class SkillSystem {
 
   _award(label, points, variant) {
     this.ui.showSkill(label, points, variant);
+    this.audio.skill();
     this.chainScore += points;
     this.chainMult = Math.min(9.9, this.chainMult + 0.2);
     this.chainTimer = SkillSystem.CHAIN_TIME;
@@ -48,11 +59,11 @@ class SkillSystem {
   }
 
   crash(strength) {
-    // Only meaningful impacts break the chain
-    if (strength < 5) return;
+    if (strength < 5) return; // only meaningful impacts break the chain
     this.cleanTimer = 0;
     if (this.chainActive) {
       this.ui.showSkill('CHAIN BROKEN', null, 'fail');
+      this.audio.fail();
       this.chainActive = false;
       this.chainScore = 0;
       this.chainMult = 1;
@@ -108,7 +119,7 @@ class SkillSystem {
     // --- Air
     if (v.grounded === 0) this.airborne += dt;
     else {
-      if (this.airborne > 0.6) this._award('AIR', Math.round(this.airborne * 250), 'cyan');
+      if (this.airborne > 0.6) this._award(this.airborne > 1.5 ? 'GREAT AIR' : 'AIR', Math.round(this.airborne * 250), 'cyan');
       this.airborne = 0;
     }
 
@@ -121,26 +132,28 @@ class SkillSystem {
       }
     }
 
-    // --- Chain timer / banking (timer pauses while mid-drift)
+    // --- Chain timer / banking (timer pauses mid-drift)
     if (this.chainActive) {
       if (!v.isDrifting) this.chainTimer -= dt;
-      const live = this.chainScore + this.driftPoints;
-      this.ui.updateChain(true, live, this.chainMult, this.chainTimer / SkillSystem.CHAIN_TIME);
+      this.ui.updateChain(true, this.chainScore + this.driftPoints, this.chainMult, this.chainTimer / SkillSystem.CHAIN_TIME);
       if (this.chainTimer <= 0) {
         const banked = Math.round(this.chainScore * this.chainMult);
         this.total += banked;
         this.stats.bestChain = Math.max(this.stats.bestChain, banked);
         this.ui.showSkill('SKILL CHAIN', banked, 'lime');
         this.ui.bankChain();
+        this.audio.bank();
+        this.progression.stat('bestChain', banked);
+        this.progression.stat('longestDrift', this.stats.longestDrift);
+        this.progression.stat('topSpeed', this.stats.topSpeed);
+        this.progression.addSkillScore(banked);
         this.chainActive = false;
         this.chainScore = 0;
         this.chainMult = 1;
       }
     } else if (this.driftPoints > 60) {
-      // show the live drift building before the first award
       this.ui.updateChain(true, this.driftPoints, this.chainMult, 1);
     }
-    this.stats.total = this.total;
     this.ui.setTotalScore(this.total);
   }
 }
@@ -156,13 +169,17 @@ class App {
     this.frame = 0;
     this._envDirty = false;
     this._envTimer = 0;
+    this._saveTimer = 0;
   }
 
   async init() {
+    this.progression = new Progression();
+    const settings = this.progression.settings;
     this.ui = new UI({
       onAction: (a, d) => this.onMenuAction(a, d),
       onSetting: (k, v) => this.onSetting(k, v),
     });
+    this.ui.applySettings(settings);
     this.ui.setLoading(0.05, 'Starting renderer…');
 
     // ---------------------------------------------------------- Renderer
@@ -174,7 +191,8 @@ class App {
       throw err;
     }
     const r = this.renderer;
-    r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.resolutionScale = settings.resolution;
+    r.setPixelRatio(Math.min(window.devicePixelRatio, 2) * this.resolutionScale);
     r.setSize(window.innerWidth, window.innerHeight);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
@@ -199,13 +217,37 @@ class App {
     await nextFrame();
 
     this.input = new InputController();
-    this.vehicle = new Vehicle(this.scene, this.physics);
+    this.input.touch = this.ui.touch;
+    this.vehicle = new Vehicle(this.scene, this.physics, this.progression.selectedPreset);
+    this.vehicle.setPaint(this.progression.selectedPaint);
     this.vehicle.reset(this.env.startPosition, this.env.startYaw);
 
     this.cameraCtl = new CameraController(this.camera);
     this.cameraCtl.snap(this.vehicle);
 
-    this.skills = new SkillSystem(this.ui);
+    // ------------------------------------------------ Game systems
+    this.audio = new AudioSystem();
+    this.audio.musicOn = settings.radio;
+    this.audio.setVolumes({ master: settings.master, music: settings.music, sfx: settings.sfx });
+    this.skills = new SkillSystem(this.ui, this.audio, this.progression);
+    const ctx = {
+      scene: this.scene, physics: this.physics, env: this.env, player: this.vehicle,
+      ui: this.ui, audio: this.audio, progression: this.progression,
+    };
+    this.events = new EventManager(ctx);
+    this.stunts = new StuntManager(ctx);
+    this.traffic = new AmbientTraffic(ctx);
+    this.traffic.spawn(4, this.vehicle.root.position);
+
+    this.progression.onChange((type, payload) => {
+      if (type === 'levelup') {
+        this.ui.levelBanner(payload.level, payload.reward);
+        this.audio.levelUp();
+      }
+      this.ui.updateProfile(this.progression);
+      if (this.state === STATE.MENU && this.ui.activeTab === 'garage') this.ui.renderGarage(this.progression);
+    });
+    this.ui.updateProfile(this.progression);
 
     // ----------------------------------------------- Env map + post FX
     this.ui.setLoading(0.85, 'Lighting…');
@@ -213,21 +255,24 @@ class App {
     this.envScene = new THREE.Scene();
     this.envSky = new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), createSkyMaterial());
     this.envScene.add(this.envSky);
+    this.env.setTimeOfDay(settings.time);
     this._updateEnvMap();
     this.scene.environmentIntensity = 0.7;
 
     this.post = createPostProcessing(r, this.scene, this.camera);
+    this.post.bloomPass.enabled = settings.bloom;
+    this.post.blurEnabled = settings.blur;
+    if (settings.shadows !== 2048) this.env.setShadowQuality(settings.shadows);
 
     // ---------------------------------------------------------- Events
     window.addEventListener('resize', () => this.onResize());
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape') {
-        e.preventDefault();
-        this.toggleMenu();
-      }
-    });
+    window.addEventListener('keydown', (e) => this.onKey(e));
+    const unlock = () => this.audio.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) this.clock.getDelta(); // drop the hidden gap
+      else if (this.state === STATE.GAMEPLAY) this.openMenu(); // auto-pause
     });
 
     // Warm-up render so shader compilation happens behind the loader
@@ -240,16 +285,41 @@ class App {
 
     this.ui.setLoading(1, 'Ready');
     this.ui.hideLoader();
-    this.state = STATE.GAMEPLAY;
-    this.ui.toast('W A S D / Arrows to drive · Space handbrake · Esc menu', 3500);
-    canvas.focus();
 
     console.info(
       `[Horizon] physics=${backend} · instanced roadside objects=${this.env.instanceCount} · barriers=${this.env.barrierCount}`
     );
 
+    // Title screen with the showroom camera orbiting the player's car
+    this.state = STATE.TITLE;
+    this.cameraCtl.setMode('showroom');
+    this.ui.showTitle(this.progression, (touch) => this.startGame(touch));
+
     this.clock.getDelta();
     r.setAnimationLoop(() => this.tick());
+  }
+
+  startGame(touch) {
+    this.audio.unlock();
+    if (touch || matchMedia('(pointer: coarse)').matches) this.ui.enableTouch();
+    this.state = STATE.GAMEPLAY;
+    this.input.enabled = true;
+    this.cameraCtl.setMode(this.cameraCtl.chaseMode);
+    this.cameraCtl.snap(this.vehicle);
+    this.ui.toast(touch ? 'Hold GAS to drive · ☰ for menu' : 'W A S D / Arrows to drive · Space handbrake · Esc menu', 3500);
+    document.getElementById('scene').focus();
+  }
+
+  onKey(e) {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      if (this.state === STATE.RESULTS) this.onMenuAction('results-continue');
+      else this.toggleMenu();
+    }
+    if (this.state === STATE.RESULTS && (e.code === 'Enter' || e.code === 'Space')) {
+      e.preventDefault();
+      this.onMenuAction('results-continue');
+    }
   }
 
   // ---------------------------------------------------------------- State
@@ -262,7 +332,8 @@ class App {
     this.state = STATE.MENU;
     this.input.enabled = false;
     this.cameraCtl.setMode('showroom');
-    this.ui.updateStats(this.skills.stats);
+    this.ui.setTouchVisible(false);
+    this.progression.save();
     this.ui.openMenu();
   }
 
@@ -270,6 +341,7 @@ class App {
     this.state = STATE.GAMEPLAY;
     this.input.enabled = true;
     this.cameraCtl.setMode(this.cameraCtl.chaseMode);
+    this.ui.setTouchVisible(true);
     this.ui.closeMenu();
     this.clock.getDelta();
   }
@@ -278,32 +350,69 @@ class App {
     const v = this.vehicle;
     const p = v.root.position;
     const env = this.env;
-    // nearest track sample
-    let best = 0, bestD = Infinity;
-    for (let i = 0; i < env.trackSamples.length; i++) {
-      const s = env.trackSamples[i];
-      const d = (s.x - p.x) ** 2 + (s.z - p.z) ** 2;
-      if (d < bestD) { bestD = d; best = i; }
+    if (env.inPlaza(p.x, p.z) && !this.events.active) {
+      v.reset(env.startPosition, env.startYaw);
+    } else {
+      const i = env.nearestIndex(p.x, p.z);
+      const pos = env.trackPoint(i, 0, new THREE.Vector3());
+      pos.y = 1.2;
+      v.reset(pos, env.trackYaw(i));
     }
-    const s = env.trackSamples[best];
-    const t = env.trackTangents[best];
-    const pos = new THREE.Vector3(s.x, 1.2, s.z);
-    // If we are near the start plaza, use the grid instead
-    if (env.inPlaza(p.x, p.z)) v.reset(env.startPosition, env.startYaw);
-    else v.reset(pos, Math.atan2(t.x, t.z));
     this.cameraCtl.snap(v);
     this.skills.reset();
+    this.stunts.reset();
+  }
+
+  startEvent(id) {
+    const def = EVENTS.find((e) => e.id === id);
+    if (!def) return;
+    if (this.state === STATE.MENU) this.closeMenu();
+    this.ui.hideResults();
+    this.state = STATE.GAMEPLAY;
+    this.input.enabled = true;
+    this.stunts.reset();
+    this.stunts.enabled = false;
+    this.skills.reset();
+    this.traffic.despawn();
+    this.events.start(def);
+    this.cameraCtl.snap(this.vehicle);
+    this.ui.toast(def.type === 'race' ? `${def.name} · ${def.laps} lap${def.laps > 1 ? 's' : ''}` : `${def.name} · best lap counts`);
+  }
+
+  endEvent() {
+    this.events.cleanup();
+    this.traffic.spawn(4, this.vehicle.root.position);
+    this.stunts.enabled = true;
+    this.stunts.reset();
+    this.ui.hideResults();
+    this.state = STATE.GAMEPLAY;
+    this.input.enabled = true;
+    this.ui.setTouchVisible(true);
+    this.ui.updateProfile(this.progression);
   }
 
   onMenuAction(action, data) {
+    const prog = this.progression;
     switch (action) {
+      case 'toggle-menu':
+        this.toggleMenu();
+        break;
+      case 'tab':
+        if (data === 'festival') {
+          this.ui.renderEvents(EVENTS, prog, this.events.def?.id);
+          this.ui.updateStats(prog, this.skills.stats);
+        } else if (data === 'garage') this.ui.renderGarage(prog);
+        this.audio.click();
+        break;
       case 'resume':
         this.closeMenu();
         break;
       case 'reset':
+        if (this.events.active) { this.resetCar(); this.closeMenu(); break; }
         this.vehicle.reset(this.env.startPosition, this.env.startYaw);
         this.env.resetCones();
         this.skills.reset();
+        this.stunts.reset();
         this.closeMenu();
         this.cameraCtl.snap(this.vehicle);
         this.ui.toast('Back at the Festival site');
@@ -323,30 +432,107 @@ class App {
         this.ui.toast(`Camera: ${name}`);
         break;
       }
-      case 'select-car':
-        this.vehicle.applyPreset(data);
-        this.ui.toast(`${data.name} equipped`);
+      case 'start-event':
+        this.startEvent(data);
         break;
+      case 'quit-event':
+        this.events.quit();
+        this.traffic.spawn(4, this.vehicle.root.position);
+        this.stunts.enabled = true;
+        this.ui.renderEvents(EVENTS, prog, null);
+        this.closeMenu();
+        break;
+      case 'results-continue':
+        this.audio.click();
+        this.endEvent();
+        break;
+      case 'results-retry':
+        this.audio.click();
+        this.startEvent(this.events.def?.id);
+        break;
+      case 'select-car':
+        if (this.events.active) { this.ui.toast("Can't swap cars during an event"); break; }
+        if (prog.selectCar(data)) {
+          this.vehicle.applyPreset(prog.selectedPreset, prog.selectedPaint);
+          this.ui.renderGarage(prog);
+          this.ui.updateProfile(prog);
+          this.ui.toast(`${prog.selectedPreset.name} equipped`);
+          this.audio.click();
+        }
+        break;
+      case 'buy-car': {
+        const car = CAR_PRESETS.find((c) => c.id === data);
+        const res = prog.buyCar(data);
+        if (res.ok) {
+          this.audio.purchase();
+          this.ui.toast(`${car.name} added to your garage!`);
+          if (!this.events.active) this.onMenuAction('select-car', data);
+        } else {
+          this.audio.fail();
+          this.ui.toast(`${car.name}: ${res.reason} (${car.price.toLocaleString()} CR)`);
+        }
+        this.ui.renderGarage(prog);
+        break;
+      }
+      case 'upgrade': {
+        if (this.events.active) { this.ui.toast("Can't upgrade during an event"); break; }
+        const res = prog.buyUpgrade(prog.data.selectedCar, data);
+        if (res.ok) {
+          this.audio.purchase();
+          this.vehicle.applyPreset(prog.selectedPreset, prog.selectedPaint);
+          this.ui.toast('Upgrade installed');
+        } else {
+          this.audio.fail();
+          this.ui.toast(res.reason);
+        }
+        this.ui.renderGarage(prog);
+        this.ui.updateProfile(prog);
+        break;
+      }
       case 'paint':
+        prog.setPaint(prog.data.selectedCar, data);
         this.vehicle.setPaint(data);
+        this.ui.renderGarage(prog);
+        break;
+      case 'reset-progress':
+        if (window.confirm('Reset all progress? Credits, cars, upgrades and records will be lost.')) {
+          if (this.events.active) {
+            this.events.quit();
+            this.stunts.enabled = true;
+            this.traffic.spawn(4, this.vehicle.root.position);
+          }
+          prog.resetAll();
+          this.vehicle.applyPreset(prog.selectedPreset, prog.selectedPaint);
+          this.ui.updateProfile(prog);
+          this.ui.toast('Progress reset');
+        }
         break;
       case 'redraw-map':
-        this.ui.drawWorldMap(this.vehicle, this.env);
+        this.ui.drawWorldMap(this.vehicle, this.env, prog);
         break;
     }
   }
 
   onSetting(key, value) {
+    this.progression.setSetting(key, value);
     switch (key) {
       case 'units':
         this.ui.setUnits(value);
-        this.ui.updateStats(this.skills.stats);
+        this.ui.updateStats(this.progression, this.skills.stats);
         break;
       case 'bloom':
         this.post.bloomPass.enabled = value;
         break;
       case 'blur':
         this.post.blurEnabled = value;
+        break;
+      case 'radio':
+        this.audio.setMusic(value);
+        break;
+      case 'master':
+      case 'music':
+      case 'sfx':
+        this.audio.setVolumes({ [key]: value });
         break;
       case 'shadows':
         this.env.setShadowQuality(value);
@@ -363,6 +549,7 @@ class App {
 
   setTime(elevation, syncSlider = true) {
     this.env.setTimeOfDay(elevation);
+    this.progression.setSetting('time', elevation);
     if (syncSlider) this.ui.setTimeSlider(elevation);
     // Env-map regeneration is debounced (slider drags fire rapidly)
     this._envDirty = true;
@@ -370,7 +557,6 @@ class App {
   }
 
   _updateEnvMap() {
-    // Share sky uniforms so the reflection matches the visible sky
     const src = this.env.sky.material.uniforms;
     const dst = this.envSky.material.uniforms;
     for (const k of ['uSunDir', 'uZenith', 'uHorizon', 'uGround', 'uSunColor']) dst[k].value.copy(src[k].value);
@@ -397,49 +583,90 @@ class App {
     this.frame++;
     const input = this.input;
     input.update(dt);
+    const state = this.state;
 
     // ---- Global actions
-    if (input.consume('menu')) this.toggleMenu();
+    if (input.consume('menu')) {
+      if (state === STATE.RESULTS) this.onMenuAction('results-continue');
+      else this.toggleMenu();
+    }
+    if (input.consume('radio')) {
+      const on = !this.progression.settings.radio;
+      this.onSetting('radio', on);
+      document.getElementById('set-radio').checked = on;
+      this.ui.toast(on ? 'Horizon Pulse radio ON' : 'Radio OFF');
+    }
 
-    if (this.state === STATE.MENU) {
-      if (input.consume('tabLeft')) this.ui.cycleTab(-1);
-      if (input.consume('tabRight')) this.ui.cycleTab(1);
+    if (state === STATE.MENU || state === STATE.RESULTS) {
+      if (state === STATE.MENU) {
+        if (input.consume('tabLeft')) this.ui.cycleTab(-1);
+        if (input.consume('tabRight')) this.ui.cycleTab(1);
+      }
       if (input.consume('navUp')) this.ui.navigate(0, -1);
       if (input.consume('navDown')) this.ui.navigate(0, 1);
       if (input.consume('navLeft')) this.ui.navigate(-1, 0);
       if (input.consume('navRight')) this.ui.navigate(1, 0);
       if (input.consume('confirm')) this.ui.confirm();
-      if (input.consume('back')) this.closeMenu();
+      if (input.consume('back')) {
+        if (state === STATE.MENU) this.closeMenu();
+        else this.onMenuAction('results-continue');
+      }
       input.consume('camera');
       input.consume('reset');
     } else {
       for (const a of ['tabLeft', 'tabRight', 'navUp', 'navDown', 'navLeft', 'navRight', 'confirm', 'back']) input.consume(a);
-      if (input.consume('camera')) {
-        const name = this.cameraCtl.cycleChaseMode();
-        this.ui.setCameraLabel(name);
-        this.ui.toast(`Camera: ${name}`);
+      if (state === STATE.GAMEPLAY) {
+        if (input.consume('camera')) {
+          const name = this.cameraCtl.cycleChaseMode();
+          this.ui.setCameraLabel(name);
+          this.ui.toast(`Camera: ${name}`);
+        }
+        if (input.consume('reset') && !this.events.freezePlayer) this.resetCar();
       }
-      if (input.consume('reset')) this.resetCar();
     }
 
-    // ---- Simulation (paused while in the menu)
+    // ---- Simulation (paused in the menu / title)
     let alpha = 1;
-    if (this.state === STATE.GAMEPLAY) {
-      alpha = this.physics.step(dt, (fixedDt) => this.vehicle.fixedUpdate(fixedDt, input));
+    const simulate = this.state === STATE.GAMEPLAY || this.state === STATE.RESULTS;
+    if (simulate) {
+      const playerInput = this.state === STATE.RESULTS ? IDLE_INPUT : this.events.freezePlayer ? FROZEN_INPUT : input;
+      alpha = this.physics.step(dt, (fixedDt) => {
+        this.vehicle.fixedUpdate(fixedDt, playerInput);
+        this.events.fixedUpdate(fixedDt);
+        this.traffic.fixedUpdate(fixedDt, this.vehicle);
+      });
     }
     const v = this.vehicle;
     v.update(dt, alpha);
+    this.events.updateVisuals(dt, alpha);
+    this.traffic.updateVisuals(dt, alpha);
 
     if (v.impactEvent > 0) {
       this.cameraCtl.impact(Math.min(1, v.impactEvent / 12));
-      this.skills.crash(v.impactEvent);
+      this.audio.impact(v.impactEvent);
+      if (this.state === STATE.GAMEPLAY) this.skills.crash(v.impactEvent);
       v.impactEvent = 0;
+    }
+
+    if (v.landEvent > 0) {
+      this.cameraCtl.impact(Math.min(0.6, v.landEvent / 20));
+      this.audio.impact(v.landEvent * 0.5);
+      v.landEvent = 0;
     }
 
     const knocked = this.env.update(dt, v.root.position, this.camera);
     if (this.state === STATE.GAMEPLAY) {
       if (knocked) this.skills.conesKnocked(knocked);
       this.skills.update(dt, v);
+      this.stunts.update(dt);
+      this.progression.stat('distance', v.speedAbs * dt, 'add');
+    }
+    if (simulate) {
+      this.events.update(dt);
+      if (this.events.state === 'finished' && this.state === STATE.GAMEPLAY) {
+        this.state = STATE.RESULTS;
+        this.ui.setTouchVisible(false);
+      }
     }
 
     this.cameraCtl.update(dt, v);
@@ -447,7 +674,17 @@ class App {
     // ---- HUD
     if (this.state === STATE.GAMEPLAY) {
       this.ui.updateHUD(v);
-      if (this.frame % 2 === 0) this.ui.drawMinimap(v, this.env);
+      if (this.frame % 2 === 0) {
+        this.ui.drawMinimap(v, this.env, this.events.markers() ?? { cars: this.traffic.positions(), checkpoint: null, freeRoam: true });
+      }
+    }
+    this.audio.update(v, this.state === STATE.GAMEPLAY);
+
+    // ---- Periodic save (distance / stats)
+    this._saveTimer += dt;
+    if (this._saveTimer > 20) {
+      this._saveTimer = 0;
+      this.progression.save();
     }
 
     // ---- Deferred env-map refresh

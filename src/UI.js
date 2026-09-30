@@ -1,11 +1,15 @@
-import { CAR_PRESETS, PAINT_COLORS } from './Vehicle.js';
+import { CAR_PRESETS, PAINT_COLORS, UPGRADE_TYPES, performanceIndex } from './Vehicle.js';
+import { xpForLevel } from './Progression.js';
+import { formatTime } from './Events.js';
 
 /**
  * UI.js
  * -----
- * DOM layer: HUD (tachometer, speedo, gear, minimap, skill chain popups),
- * tile-grid menu (tabs, cards, garage, world map, settings) and gamepad
- * focus navigation. Communicates with the app through callbacks only.
+ * DOM layer: title screen, HUD (tachometer, speedo, gear, minimap, skill
+ * chain, level/credits, race panel, countdown, stunt banners), results
+ * screen, tile-grid menu (events, garage shop + upgrades, world map,
+ * settings), gamepad focus navigation and touch controls. Talks to the game
+ * only through the callbacks passed in.
  */
 
 const TAB_ORDER = ['festival', 'garage', 'map', 'settings'];
@@ -18,6 +22,11 @@ const REDLINE = 7500;
 const MS_TO_MPH = 2.23694;
 const MS_TO_KMH = 3.6;
 const MINIMAP_RANGE = 170; // metres from centre to edge
+const STUNT_COLORS = { trap: '#2de2ff', zone: '#2de2ff', drift: '#b36bff', jump: '#ffd23f' };
+const STUNT_LABELS = { trap: 'SPEED TRAP', zone: 'SPEED ZONE', drift: 'DRIFT ZONE', jump: 'DANGER SIGN' };
+
+const fmt = (n) => Math.round(n).toLocaleString();
+const starsHTML = (n, max = 3) => Array.from({ length: max }, (_, i) => `<span class="${i < n ? 'on' : ''}">★</span>`).join('');
 
 export class UI {
   /**
@@ -28,33 +37,38 @@ export class UI {
     this.units = 'mph';
     this.menuOpen = false;
     this.activeTab = 'festival';
-    this.selectedCar = CAR_PRESETS[0].id;
-    this.selectedPaint = CAR_PRESETS[0].color;
     this.focusIndex = -1;
+    this.garageCar = null;
+    this.touch = { left: false, right: false, throttle: false, brake: false, handbrake: false, active: false };
 
     const $ = (id) => document.getElementById(id);
+    this.$ = $;
     this.el = {
       loader: $('loader'), loaderFill: $('loader-fill'), loaderText: $('loader-text'),
+      title: $('title'), titleStart: $('title-start'),
       hud: $('hud'), speed: $('speed'), speedUnit: $('speed-unit'), gear: $('gear'),
       rpmArc: $('tacho-arc'), rpmReadout: $('rpm-readout'), handbrake: $('handbrake-light'),
       ticks: $('tacho-ticks'), tacho: document.querySelector('.tacho'),
       minimap: $('minimap-canvas'), worldMap: $('world-map'),
       chain: $('skill-chain'), chainScore: $('skill-chain-score'), chainMult: $('skill-chain-mult'),
       chainTimer: $('skill-chain-timer'), feed: $('skill-feed'), totalScore: $('total-score'),
-      toast: $('toast'), menu: $('menu'), credits: $('menu-credits'), carName: $('menu-car-name'),
+      toast: $('toast'), menu: $('menu'), carName: $('menu-car-name'), carClass: $('menu-car-class'),
       cameraLabel: $('camera-label'), backend: $('physics-backend'), fatal: $('fatal'),
-      statTotal: $('stat-total'), statBest: $('stat-best'), statDrift: $('stat-drift'), statTop: $('stat-top'),
+      raceHud: $('race-hud'), countdown: $('countdown'), wrongWay: $('wrong-way'),
+      zone: $('zone-meter'), stunt: $('stunt-banner'), results: $('results'), touchLayer: $('touch'),
     };
     this.mmCtx = this.el.minimap.getContext('2d');
     this.mapCtx = this.el.worldMap.getContext('2d');
 
     // cached values to avoid redundant DOM writes
-    this._last = { speed: -1, gear: '', rpm: -1, hb: null, score: -1, redline: null };
+    this._last = { speed: -1, gear: '', rpm: -1, hb: null, score: -1, redline: null, race: {} };
 
     this._buildTacho();
-    this._buildGarage();
+    this._buildSwatches();
     this._bindMenu();
     this._bindSettings();
+    this._bindResults();
+    this._bindTouch();
   }
 
   // ================================================================ Loader
@@ -77,6 +91,28 @@ export class UI {
     this.el.backend.textContent = `Physics: ${name === 'rapier' ? 'Rapier (WASM)' : 'Lite fallback'}`;
   }
 
+  // ================================================================= Title
+  showTitle(progression, onStart) {
+    const d = progression.data;
+    this.$('title-level').textContent = d.level;
+    this.$('title-credits').textContent = fmt(d.credits);
+    this.$('title-car').textContent = progression.selectedPreset.name;
+    this.el.title.hidden = false;
+    this.el.hud.classList.add('is-hidden');
+    const isTouch = matchMedia('(pointer: coarse)').matches;
+    this.el.titleStart.textContent = isTouch ? 'TAP TO DRIVE' : 'PRESS ANY KEY TO DRIVE';
+    const go = (e) => {
+      if (e.type === 'keydown' && ['Tab', 'F5', 'F12'].includes(e.key)) return;
+      window.removeEventListener('keydown', go, true);
+      window.removeEventListener('pointerdown', go, true);
+      this.el.title.hidden = true;
+      this.el.hud.classList.remove('is-hidden');
+      onStart(e.type === 'pointerdown' && e.pointerType === 'touch');
+    };
+    window.addEventListener('keydown', go, true);
+    window.addEventListener('pointerdown', go, true);
+  }
+
   // ================================================================= Tacho
   _buildTacho() {
     const ns = 'http://www.w3.org/2000/svg';
@@ -89,11 +125,9 @@ export class UI {
 
     for (let i = 0; i <= 9; i++) {
       const a = ((135 + (i / 9) * 270) * Math.PI) / 180;
-      const x1 = 100 + Math.cos(a) * 72, y1 = 100 + Math.sin(a) * 72;
-      const x2 = 100 + Math.cos(a) * 78, y2 = 100 + Math.sin(a) * 78;
       const line = document.createElementNS(ns, 'line');
-      line.setAttribute('x1', x1); line.setAttribute('y1', y1);
-      line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+      line.setAttribute('x1', 100 + Math.cos(a) * 72); line.setAttribute('y1', 100 + Math.sin(a) * 72);
+      line.setAttribute('x2', 100 + Math.cos(a) * 78); line.setAttribute('y2', 100 + Math.sin(a) * 78);
       line.setAttribute('class', 'tacho__tick tacho__tick--major');
       this.el.ticks.appendChild(line);
       const label = document.createElementNS(ns, 'text');
@@ -125,7 +159,6 @@ export class UI {
       const leadCount = firstSig === -1 ? 2 : firstSig;
       this.el.speed.innerHTML = `<span class="lead">${s.slice(0, leadCount)}</span>${s.slice(leadCount)}`;
     }
-
     if (vehicle.gearLabel !== L.gear) {
       L.gear = vehicle.gearLabel;
       this.el.gear.textContent = L.gear;
@@ -133,7 +166,6 @@ export class UI {
       void this.el.gear.offsetWidth; // restart animation
       this.el.gear.classList.add('is-shift');
     }
-
     const rpm = Math.round(vehicle.rpm / 50) * 50;
     if (rpm !== L.rpm) {
       L.rpm = rpm;
@@ -147,7 +179,6 @@ export class UI {
         this.el.rpmArc.classList.toggle('is-redline', red);
       }
     }
-
     if (vehicle.handbrake !== L.hb) {
       L.hb = vehicle.handbrake;
       this.el.handbrake.classList.toggle('is-on', L.hb);
@@ -165,8 +196,24 @@ export class UI {
     return `${Math.round(ms * conv)} ${this.units === 'mph' ? 'MPH' : 'KM/H'}`;
   }
 
+  // ======================================================= Profile / level
+  updateProfile(progression) {
+    const d = progression.data;
+    const frac = Math.min(1, d.xp / xpForLevel(d.level));
+    this.$('hud-level').textContent = d.level;
+    this.$('hud-credits').textContent = fmt(d.credits);
+    this.$('hud-xp').style.width = `${(frac * 100).toFixed(1)}%`;
+    this.$('menu-level').textContent = d.level;
+    this.$('menu-level-2').textContent = d.level;
+    this.$('menu-credits').textContent = fmt(d.credits);
+    this.$('menu-xp').style.width = `${(frac * 100).toFixed(1)}%`;
+    const preset = progression.selectedPreset;
+    this.el.carName.textContent = preset.name;
+    this.el.carClass.textContent = performanceIndex(preset).label;
+  }
+
   // =============================================================== Minimap
-  drawMinimap(vehicle, env) {
+  drawMinimap(vehicle, env, markers) {
     const ctx = this.mmCtx;
     const W = this.el.minimap.width;
     const half = W / 2;
@@ -181,14 +228,12 @@ export class UI {
     ctx.arc(half, half, half, 0, Math.PI * 2);
     ctx.clip();
 
-    // World → minimap: translate car to centre, rotate so heading is up.
-    // World +X is "left" when looking along +Z, so mirror X.
+    // World → minimap: car at centre, heading up; world +X is "left" → mirror.
     ctx.translate(half, half);
     ctx.rotate(yaw);
     ctx.scale(-scale, -scale);
     ctx.translate(-p.x, -p.z);
 
-    // grid
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1 / scale;
     const g0x = Math.floor((p.x - 250) / 50) * 50, g0z = Math.floor((p.z - 250) / 50) * 50;
@@ -197,38 +242,60 @@ export class UI {
     for (let z = g0z; z < p.z + 250; z += 50) { ctx.moveTo(p.x - 250, z); ctx.lineTo(p.x + 250, z); }
     ctx.stroke();
 
-    // track
     const pts = env.trackPoints2D;
-    const trace = () => {
-      ctx.beginPath();
-      ctx.moveTo(pts[0], pts[1]);
-      for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
-      ctx.closePath();
-    };
+    ctx.beginPath();
+    ctx.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+    ctx.closePath();
     ctx.lineJoin = 'round';
-    trace();
     ctx.strokeStyle = 'rgba(255,255,255,0.85)';
     ctx.lineWidth = 20;
     ctx.stroke();
     ctx.strokeStyle = '#3d4250';
     ctx.lineWidth = 14;
     ctx.stroke();
-    // route highlight
-    ctx.strokeStyle = 'rgba(45,226,255,0.8)';
+    const racing = markers && !markers.freeRoam;
+    ctx.strokeStyle = racing ? 'rgba(255,45,143,0.9)' : 'rgba(45,226,255,0.8)';
     ctx.lineWidth = 3;
     ctx.stroke();
 
-    // plaza
     ctx.fillStyle = 'rgba(80,86,100,0.9)';
     ctx.fillRect(-45, -110, 90, 100);
 
-    // cones
+    // stunt icons (free roam)
+    if (!racing) {
+      for (const st of env.stunts) {
+        const pos = st.type === 'jump' ? st.ramp : env.trackSamples[st.index];
+        ctx.fillStyle = STUNT_COLORS[st.type];
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.z, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     ctx.fillStyle = '#ff7a1a';
     for (const c of env.cones) {
       const t = c.body ? c.body.translation() : c;
       ctx.beginPath();
       ctx.arc(t.x, t.z, 1.4, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    if (markers) {
+      if (markers.checkpoint) {
+        const c = markers.checkpoint;
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 3 / scale + 2;
+        ctx.beginPath();
+        ctx.arc(c.x, c.z, 9, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = racing ? '#ff4d5e' : 'rgba(255,255,255,0.85)';
+      for (const c of markers.cars) {
+        ctx.beginPath();
+        ctx.arc(c.x, c.z, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.restore();
 
@@ -249,7 +316,7 @@ export class UI {
     ctx.restore();
   }
 
-  drawWorldMap(vehicle, env) {
+  drawWorldMap(vehicle, env, progression) {
     const canvas = this.el.worldMap;
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -257,13 +324,11 @@ export class UI {
     canvas.height = Math.max(200, rect.height * dpr);
     const ctx = this.mapCtx;
     const W = canvas.width, H = canvas.height;
-    const b = env.bounds;
+    const b = env.mapBounds;
     const pad = 40 * dpr;
-    const sx = (W - pad * 2) / (b.maxX - b.minX);
-    const sz = (H - pad * 2) / (b.maxZ - b.minZ);
-    const s = Math.min(sx, sz);
+    const s = Math.min((W - pad * 2) / (b.maxX - b.minX), (H - pad * 2) / (b.maxZ - b.minZ));
     const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
-    // North (+Z) up, world +X shown to the left (mirrored like the minimap)
+    // North (+Z) up, world +X to the left (mirrored like the minimap)
     const X = (x) => W / 2 - (x - cx) * s;
     const Y = (z) => H / 2 - (z - cz) * s;
 
@@ -283,16 +348,14 @@ export class UI {
       ctx.beginPath(); ctx.moveTo(0, Y(z)); ctx.lineTo(W, Y(z)); ctx.stroke();
     }
 
-    // trees
     const tp = env.treePositions;
     for (let i = 0; i < tp.length; i += 3) {
-      ctx.fillStyle = tp[i + 2] === 1 ? 'rgba(255,179,209,0.75)' : 'rgba(80,140,90,0.55)';
+      ctx.fillStyle = tp[i + 2] === 1 ? 'rgba(255,179,209,0.6)' : 'rgba(80,140,90,0.5)';
       ctx.beginPath();
       ctx.arc(X(tp[i]), Y(tp[i + 1]), (tp[i + 2] === 1 ? 2.4 : 1.8) * dpr, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // track
     const pts = env.trackPoints2D;
     ctx.beginPath();
     ctx.moveTo(X(pts[0]), Y(pts[1]));
@@ -306,23 +369,33 @@ export class UI {
     ctx.lineWidth = 14 * s;
     ctx.stroke();
 
-    // plaza
     ctx.fillStyle = '#555b69';
     ctx.fillRect(X(45), Y(-10), 90 * s, 100 * s);
     ctx.fillStyle = '#ff2d8f';
     ctx.font = `800 ${14 * dpr}px "Barlow Condensed", sans-serif`;
     ctx.fillText('FESTIVAL SITE', X(45), Y(-10) - 6 * dpr);
 
-    // cones
-    ctx.fillStyle = '#ff7a1a';
-    for (const c of env.cones) {
-      const t = c.body ? c.body.translation() : c;
+    // PR stunts with star ratings
+    ctx.textAlign = 'center';
+    for (const st of env.stunts) {
+      const pos = st.type === 'jump' ? st.ramp : env.trackSamples[st.index];
+      const x = X(pos.x), y = Y(pos.z);
+      ctx.fillStyle = STUNT_COLORS[st.type];
       ctx.beginPath();
-      ctx.arc(X(t.x), Y(t.z), 2 * dpr, 0, Math.PI * 2);
+      ctx.arc(x, y, 7 * dpr, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const rec = progression?.data.stunts[st.id];
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${12 * dpr}px "Barlow Condensed", sans-serif`;
+      ctx.fillText(st.name.toUpperCase(), x, y - 12 * dpr);
+      ctx.fillStyle = '#ffd23f';
+      ctx.fillText('★'.repeat(rec?.stars || 0) + '☆'.repeat(3 - (rec?.stars || 0)), x, y + 20 * dpr);
     }
+    ctx.textAlign = 'left';
 
-    // player
     const p = vehicle.root.position;
     const yaw = Math.atan2(vehicle.forward.x, vehicle.forward.z);
     ctx.save();
@@ -341,7 +414,6 @@ export class UI {
     ctx.stroke();
     ctx.restore();
 
-    // compass
     ctx.fillStyle = '#fff';
     ctx.font = `800 ${20 * dpr}px "Barlow Condensed", sans-serif`;
     ctx.fillText('N ↑', W - 60 * dpr, 34 * dpr);
@@ -351,9 +423,9 @@ export class UI {
   showSkill(label, points, variant = '') {
     const el = document.createElement('div');
     el.className = `skill-pop${variant ? ` skill-pop--${variant}` : ''}`;
-    el.innerHTML = points != null ? `${label}<b>+${Math.round(points).toLocaleString()}</b>` : label;
+    el.innerHTML = points != null ? `${label}<b>+${fmt(points)}</b>` : label;
     this.el.feed.prepend(el);
-    while (this.el.feed.children.length > 4) this.el.feed.lastChild.remove();
+    while (this.el.feed.children.length > 3) this.el.feed.lastChild.remove();
     setTimeout(() => el.remove(), 2400);
   }
 
@@ -362,7 +434,7 @@ export class UI {
     if (active) {
       c.classList.remove('is-banked');
       c.classList.add('is-active');
-      this.el.chainScore.textContent = Math.round(score).toLocaleString();
+      this.el.chainScore.textContent = fmt(score);
       this.el.chainMult.textContent = `x${mult.toFixed(1)}`;
       this.el.chainTimer.style.transform = `scaleX(${Math.max(0, timerFrac).toFixed(3)})`;
     }
@@ -383,18 +455,22 @@ export class UI {
     const v = Math.round(total);
     if (v === this._last.score) return;
     this._last.score = v;
-    this.el.totalScore.textContent = v.toLocaleString();
-    this.el.credits.textContent = Math.round(v * 2.5).toLocaleString();
+    this.el.totalScore.textContent = fmt(v);
   }
 
-  updateStats(stats) {
-    this.el.statTotal.textContent = Math.round(stats.total).toLocaleString();
-    this.el.statBest.textContent = Math.round(stats.bestChain).toLocaleString();
-    this.el.statDrift.textContent = `${Math.round(stats.longestDrift)} m`;
-    this.el.statTop.textContent = this.formatSpeed(stats.topSpeed);
+  updateStats(progression, sessionStats) {
+    const d = progression.data;
+    const st = d.stats;
+    this.$('stat-total').textContent = fmt(d.totalSkill);
+    this.$('stat-best').textContent = fmt(Math.max(st.bestChain, sessionStats?.bestChain ?? 0));
+    this.$('stat-wins').textContent = fmt(st.racesWon || 0);
+    this.$('stat-drift').textContent = `${Math.round(Math.max(st.longestDrift, sessionStats?.longestDrift ?? 0))} m`;
+    this.$('stat-top').textContent = this.formatSpeed(Math.max(st.topSpeed, sessionStats?.topSpeed ?? 0));
+    const stars = Object.values(d.stunts).reduce((a, s) => a + (s.stars || 0), 0);
+    this.$('stat-stars').textContent = `${stars} ★`;
   }
 
-  toast(msg, ms = 1600) {
+  toast(msg, ms = 1800) {
     const t = this.el.toast;
     t.textContent = msg;
     t.classList.add('is-on');
@@ -406,13 +482,118 @@ export class UI {
     this.el.cameraLabel.textContent = label;
   }
 
-  // ================================================================== Menu
+  // ============================================================ Race HUD
+  showRaceHUD(on, def) {
+    this.el.hud.classList.toggle('is-racing', on);
+    this.$('quit-event').hidden = !on;
+    if (on && def) {
+      this.$('race-name').textContent = def.name;
+      this.el.raceHud.classList.toggle('is-trial', def.type === 'trial');
+      this._last.race = {};
+    }
+  }
+
+  updateRaceHUD(d) {
+    const L = this._last.race;
+    const set = (key, id, val) => {
+      if (L[key] !== val) { L[key] = val; this.$(id).textContent = val; }
+    };
+    set('pos', 'race-pos', String(d.position));
+    set('total', 'race-total', String(d.total));
+    set('lap', 'race-lap', `${d.lap}/${d.laps}`);
+    set('time', 'race-time', formatTime(d.time));
+    set('laptime', 'race-laptime', formatTime(d.lapTime));
+    set('best', 'race-best', formatTime(d.bestLap ?? d.record));
+  }
+
+  countdown(text) {
+    const c = this.el.countdown;
+    c.textContent = text;
+    c.classList.remove('is-on', 'is-go');
+    void c.offsetWidth;
+    c.classList.add('is-on');
+    if (text === 'GO!') c.classList.add('is-go');
+  }
+
+  wrongWay(on) {
+    if (this._last.wrong === on) return;
+    this._last.wrong = on;
+    this.el.wrongWay.classList.toggle('is-on', on);
+  }
+
+  // ======================================================= Stunts & level
+  zoneMeter(name, value, stars = 0) {
+    const z = this.el.zone;
+    if (!name) { z.classList.remove('is-on'); this._last.zone = null; return; }
+    if (this._last.zone !== name) {
+      this._last.zone = name;
+      this.$('zone-name').textContent = name;
+      z.classList.add('is-on');
+    }
+    this.$('zone-value').textContent = value;
+    this.$('zone-stars').innerHTML = starsHTML(stars);
+  }
+
+  _banner(variant, type, name, value, stars, extra) {
+    const b = this.el.stunt;
+    b.className = `stunt-banner${variant ? ` stunt-banner--${variant}` : ''}`;
+    this.$('stunt-type').textContent = type;
+    this.$('stunt-name').textContent = name;
+    this.$('stunt-value').textContent = value;
+    this.$('stunt-stars').innerHTML = stars == null ? '' : starsHTML(stars);
+    this.$('stunt-extra').textContent = extra || '';
+    void b.offsetWidth;
+    b.classList.add('is-on');
+  }
+
+  stuntBanner(st, label, stars, newRecord, reward) {
+    const extra = [newRecord ? 'NEW RECORD!' : '', reward ? `+${fmt(reward)} CR` : ''].filter(Boolean).join('  ·  ');
+    const variant = st.type === 'drift' ? 'drift' : st.type === 'jump' ? 'jump' : '';
+    this._banner(variant, STUNT_LABELS[st.type], st.name, label, stars, extra);
+  }
+
+  levelBanner(level, reward) {
+    this._banner('level', 'LEVEL UP', 'Festival Reward', `LEVEL ${level}`, null, `+${fmt(reward)} CR`);
+  }
+
+  // ============================================================== Results
+  _bindResults() {
+    this.$('results-continue').addEventListener('click', () => this.cb.onAction('results-continue'));
+    this.$('results-retry').addEventListener('click', () => this.cb.onAction('results-retry'));
+  }
+
+  showResults(r) {
+    this.$('results-event').textContent = r.event.name;
+    this.$('results-title').textContent = r.title;
+    this.$('results-stars').innerHTML = r.event.type === 'trial' ? starsHTML(r.stars) : '';
+    const table = this.$('results-table');
+    table.innerHTML = r.table
+      ? r.table.map((row) => `<tr class="${row.player ? 'is-player' : ''}"><td>${row.pos}</td><td>${row.name}</td><td>${row.car}</td><td>${formatTime(row.time)}</td></tr>`).join('')
+      : `<tr><td></td><td>Targets</td><td>★ ${formatTime(r.event.stars[0])} · ★★ ${formatTime(r.event.stars[1])} · ★★★ ${formatTime(r.event.stars[2])}</td><td></td></tr>`;
+    this.$('results-time').innerHTML = `${formatTime(r.totalTime)}${r.newTimeRecord ? '<span class="rec">PB</span>' : ''}`;
+    this.$('results-lap').innerHTML = `${formatTime(r.bestLap)}${r.newLapRecord ? '<span class="rec">PB</span>' : ''}`;
+    this.$('results-credits').textContent = fmt(r.credits);
+    this.$('results-xp').textContent = fmt(r.xp);
+    this.el.results.hidden = false;
+    this.resultsOpen = true;
+    this.focusIndex = -1;
+  }
+
+  hideResults() {
+    this.el.results.hidden = true;
+    this.resultsOpen = false;
+  }
+
+  // ================================================================= Menu
   _bindMenu() {
     this.el.menu.querySelectorAll('.menu__tab').forEach((btn) => {
       btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
     });
-    this.el.menu.querySelectorAll('[data-action]').forEach((card) => {
-      card.addEventListener('click', () => this.cb.onAction(card.dataset.action));
+    this.el.menu.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-action]');
+      if (card && this.el.menu.contains(card)) {
+        this.cb.onAction(card.dataset.action, card.dataset.arg);
+      }
     });
     window.addEventListener('keydown', (e) => {
       if (!this.menuOpen) return;
@@ -424,32 +605,27 @@ export class UI {
     });
   }
 
-  _buildGarage() {
-    const wrap = document.getElementById('garage-cars');
-    wrap.innerHTML = '';
-    for (const car of CAR_PRESETS) {
-      const card = document.createElement('button');
-      card.className = 'card car-card';
-      card.dataset.car = car.id;
-      const bar = (v) => `<div class="car-card__bar"><i style="width:${Math.round(v * 100)}%"></i></div>`;
-      card.innerHTML = `
-        <div class="car-card__class">${car.klass}</div>
-        <div class="car-card__silhouette" style="--car-color:${car.color}"></div>
+  renderEvents(events, progression, activeId) {
+    const wrap = this.$('event-cards');
+    wrap.innerHTML = events.map((ev) => {
+      const rec = progression.data.records[ev.id] || {};
+      let record = '';
+      if (ev.type === 'race') record = rec.bestPosition ? `Best: ${ordinal(rec.bestPosition)} · Wins ${rec.wins || 0}` : 'Not raced yet';
+      else record = rec.bestLap ? `Best lap ${formatTime(rec.bestLap)} ${'★'.repeat(rec.stars || 0)}` : 'No time set';
+      const top = ev.type === 'race' ? `Win ${fmt(ev.payout[0])} CR` : `Up to ${fmt(ev.payout[2])} CR`;
+      return `<button class="card event-card event-card--${ev.type}" data-action="start-event" data-arg="${ev.id}">
+        <div class="event-card__type">${ev.type === 'race' ? 'ROAD RACE' : 'TIME TRIAL'}${activeId === ev.id ? ' · ACTIVE' : ''}</div>
         <div>
-          <div class="card__title">${car.name}</div>
-          <div class="card__sub">${car.drive} · ${Math.round(car.topSpeed * MS_TO_MPH)} mph top speed</div>
+          <div class="card__title">${ev.name}</div>
+          <div class="card__sub">${ev.desc} · ${top}</div>
+          <div class="event-card__record">${record}</div>
         </div>
-        <div class="car-card__stats">
-          <span>Speed</span>${bar(car.stats.speed)}
-          <span>Handling</span>${bar(car.stats.handling)}
-          <span>Accel</span>${bar(car.stats.accel)}
-          <span>Launch</span>${bar(car.stats.launch)}
-        </div>`;
-      card.addEventListener('click', () => this.selectCar(car.id));
-      wrap.appendChild(card);
-    }
+      </button>`;
+    }).join('');
+  }
 
-    const sw = document.getElementById('paint-swatches');
+  _buildSwatches() {
+    const sw = this.$('paint-swatches');
     sw.innerHTML = '';
     for (const color of PAINT_COLORS) {
       const b = document.createElement('button');
@@ -457,49 +633,97 @@ export class UI {
       b.style.background = color;
       b.dataset.color = color;
       b.title = color;
-      b.addEventListener('click', () => this.selectPaint(color));
+      b.addEventListener('click', () => this.cb.onAction('paint', color));
       sw.appendChild(b);
     }
-    this._refreshGarage();
   }
 
-  selectCar(id) {
-    const car = CAR_PRESETS.find((c) => c.id === id);
-    if (!car) return;
-    this.selectedCar = id;
-    this.selectedPaint = car.color;
-    this.el.carName.textContent = car.name;
-    document.querySelector('.menu__car-class').textContent = car.klass;
-    this._refreshGarage();
-    this.cb.onAction('select-car', car);
-  }
+  renderGarage(progression) {
+    const d = progression.data;
+    const wrap = this.$('garage-cars');
+    wrap.innerHTML = '';
+    for (const car of CAR_PRESETS) {
+      const owned = !!d.owned[car.id];
+      const tuned = progression.presetFor(car.id);
+      const pi = performanceIndex(tuned);
+      const selected = d.selectedCar === car.id;
+      const affordable = d.credits >= car.price;
+      const card = document.createElement('button');
+      card.className = `card car-card${owned ? ' is-owned' : ' is-locked'}${selected ? ' is-selected' : ''}`;
+      card.dataset.car = car.id;
+      const bar = (v) => `<div class="car-card__bar"><i style="width:${Math.round(Math.min(1, v) * 100)}%"></i></div>`;
+      const color = owned ? d.owned[car.id].paint : car.color;
+      card.innerHTML = `
+        <div class="car-card__class">${pi.label}</div>
+        <div class="car-card__silhouette" style="--car-color:${color}"></div>
+        <div>
+          <div class="card__title">${car.name}</div>
+          <div class="card__sub">${car.drive} · ${Math.round(tuned.topSpeed * MS_TO_MPH)} mph</div>
+          ${owned ? '' : `<div class="car-card__price${affordable ? '' : ' is-locked'}">${fmt(car.price)} CR</div>`}
+        </div>
+        <div class="car-card__stats">
+          <span>Speed</span>${bar(car.stats.speed)}
+          <span>Handling</span>${bar(car.stats.handling)}
+          <span>Accel</span>${bar(car.stats.accel)}
+        </div>`;
+      card.addEventListener('click', () => this.cb.onAction(owned ? 'select-car' : 'buy-car', car.id));
+      wrap.appendChild(card);
+    }
 
-  selectPaint(color) {
-    this.selectedPaint = color;
-    this._refreshGarage();
-    this.cb.onAction('paint', color);
-  }
-
-  _refreshGarage() {
-    document.querySelectorAll('.car-card').forEach((c) => c.classList.toggle('is-selected', c.dataset.car === this.selectedCar));
-    document.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('is-selected', s.dataset.color === this.selectedPaint));
+    // Paint + upgrades for the equipped car
+    const cur = d.selectedCar;
+    const paint = d.owned[cur]?.paint;
+    document.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('is-selected', s.dataset.color === paint));
+    const up = d.owned[cur]?.upgrades || {};
+    const rows = Object.entries(UPGRADE_TYPES).map(([type, info]) => {
+      const tier = up[type] || 0;
+      const cost = progression.upgradeCost(cur, type);
+      const pips = [0, 1, 2].map((i) => `<i class="${i < tier ? 'on' : ''}"></i>`).join('');
+      const btn = cost == null
+        ? '<button class="btn btn--ghost" disabled>MAX</button>'
+        : `<button class="btn" data-action="upgrade" data-arg="${type}" ${d.credits < cost ? 'disabled' : ''}>${fmt(cost)} CR</button>`;
+      return `<div class="upgrade-row"><span>${info.label}</span><div class="pips">${pips}</div>${btn}</div>`;
+    }).join('');
+    const pi = performanceIndex(progression.selectedPreset);
+    this.$('upgrades').innerHTML = `<div class="upgrades__head"><span>UPGRADES · ${progression.selectedPreset.name.toUpperCase()}</span><span>${pi.label}</span></div>${rows}`;
   }
 
   _bindSettings() {
     const on = (id, key, evt = 'change', map = (el) => el.value) => {
-      const el = document.getElementById(id);
+      const el = this.$(id);
       el.addEventListener(evt, () => this.cb.onSetting(key, map(el)));
     };
     on('set-units', 'units');
+    on('set-difficulty', 'difficulty');
     on('set-bloom', 'bloom', 'change', (el) => el.checked);
     on('set-blur', 'blur', 'change', (el) => el.checked);
+    on('set-radio', 'radio', 'change', (el) => el.checked);
     on('set-shadows', 'shadows', 'change', (el) => Number(el.value));
     on('set-time', 'time', 'input', (el) => Number(el.value));
     on('set-res', 'resolution', 'change', (el) => Number(el.value));
+    on('set-master', 'master', 'input', (el) => Number(el.value) / 100);
+    on('set-music', 'music', 'input', (el) => Number(el.value) / 100);
+    on('set-sfx', 'sfx', 'input', (el) => Number(el.value) / 100);
+  }
+
+  /** Reflect saved settings into the form controls. */
+  applySettings(s) {
+    this.$('set-units').value = s.units;
+    this.$('set-difficulty').value = s.difficulty;
+    this.$('set-bloom').checked = s.bloom;
+    this.$('set-blur').checked = s.blur;
+    this.$('set-radio').checked = s.radio;
+    this.$('set-shadows').value = String(s.shadows);
+    this.$('set-time').value = String(s.time);
+    this.$('set-res').value = String(s.resolution);
+    this.$('set-master').value = String(Math.round(s.master * 100));
+    this.$('set-music').value = String(Math.round(s.music * 100));
+    this.$('set-sfx').value = String(Math.round(s.sfx * 100));
+    this.setUnits(s.units);
   }
 
   setTimeSlider(v) {
-    document.getElementById('set-time').value = String(v);
+    this.$('set-time').value = String(v);
   }
 
   openMenu() {
@@ -526,6 +750,7 @@ export class UI {
     this.el.menu.querySelectorAll('.menu__panel').forEach((p) => p.classList.toggle('is-active', p.dataset.panel === tab));
     this._clearFocus();
     this.focusIndex = -1;
+    this.cb.onAction('tab', tab);
     if (tab === 'map') requestAnimationFrame(() => this.cb.onAction('redraw-map'));
   }
 
@@ -536,12 +761,13 @@ export class UI {
 
   // ---- Gamepad focus navigation (spatial)
   _focusables() {
+    if (this.resultsOpen) return [...this.el.results.querySelectorAll('button')];
     const panel = this.el.menu.querySelector('.menu__panel.is-active');
-    return [...panel.querySelectorAll('button.card, .swatch, label.card')];
+    return [...panel.querySelectorAll('button.card:not([hidden]), .swatch, label.card, .upgrade-row .btn:not(:disabled)')];
   }
 
   _clearFocus() {
-    this.el.menu.querySelectorAll('.is-focused').forEach((e) => e.classList.remove('is-focused'));
+    document.querySelectorAll('.is-focused').forEach((e) => e.classList.remove('is-focused'));
   }
 
   navigate(dx, dy) {
@@ -566,7 +792,9 @@ export class UI {
       if (best >= 0) this.focusIndex = best;
     }
     this._clearFocus();
-    items[this.focusIndex].classList.add('is-focused');
+    const el = items[this.focusIndex];
+    el.classList.add('is-focused');
+    el.scrollIntoView({ block: 'nearest' });
   }
 
   confirm() {
@@ -580,7 +808,8 @@ export class UI {
         input.selectedIndex = (input.selectedIndex + 1) % input.options.length;
         input.dispatchEvent(new Event('change'));
       } else if (input.type === 'range') {
-        const v = Number(input.value) + 8;
+        const step = (Number(input.max) - Number(input.min)) / 8;
+        const v = Number(input.value) + step;
         input.value = String(v > Number(input.max) ? input.min : v);
         input.dispatchEvent(new Event('input'));
       }
@@ -588,4 +817,39 @@ export class UI {
     }
     el.click();
   }
+
+  // ======================================================= Touch controls
+  _bindTouch() {
+    const layer = this.el.touchLayer;
+    const press = (btn, down) => {
+      const k = btn.dataset.touch;
+      if (k === 'menu') { if (down) this.cb.onAction('toggle-menu'); return; }
+      this.touch[k] = down;
+      btn.classList.toggle('is-down', down);
+    };
+    layer.querySelectorAll('[data-touch]').forEach((btn) => {
+      btn.addEventListener('pointerdown', (e) => { e.preventDefault(); btn.setPointerCapture?.(e.pointerId); press(btn, true); });
+      const up = (e) => { e.preventDefault(); press(btn, false); };
+      btn.addEventListener('pointerup', up);
+      btn.addEventListener('pointercancel', up);
+      btn.addEventListener('lostpointercapture', up);
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+  }
+
+  enableTouch() {
+    this.touch.active = true;
+    this.el.touchLayer.hidden = false;
+    document.body.classList.add('is-touch');
+  }
+
+  setTouchVisible(on) {
+    if (this.touch.active) this.el.touchLayer.hidden = !on;
+  }
+}
+
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
