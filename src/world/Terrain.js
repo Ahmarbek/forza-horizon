@@ -836,8 +836,10 @@ export class Terrain {
             float h0 = tnoise(p * 0.9) * oA + tnoise(p * 3.1) * oB;
             float hx = tnoise((p + vec2(e, 0.0)) * 0.9) * oA + tnoise((p + vec2(e, 0.0)) * 3.1) * oB;
             float hz = tnoise((p + vec2(0.0, e)) * 0.9) * oA + tnoise((p + vec2(0.0, e)) * 3.1) * oB;
-            vec3 bumpW = normalize(vec3(-(hx - h0) / e * 0.14, 1.0, -(hz - h0) / e * 0.14));
-            vec3 bumpV = normalize((viewMatrix * vec4(bumpW - vec3(0.0, 1.0, 0.0), 0.0)).xyz);
+            // world-space tilt from the noise slope (small, and zero where the octaves have faded;
+            // never normalised on its own, which would blow a tiny tilt up to 45° or divide by zero)
+            vec3 tilt = vec3(-(hx - h0) / e, 0.0, -(hz - h0) / e) * 0.21;
+            vec3 bumpV = (viewMatrix * vec4(tilt, 0.0)).xyz;
             float fadeB = 1.0 - smoothstep(20.0, 140.0, length(vViewPosition));
             normal = normalize(normal + bumpV * fadeB * (1.0 - gTerrainWet));
             // texture height bump (derivative based)
@@ -846,7 +848,8 @@ export class Terrain {
             vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
             float det = dot(dpx, r1);
             vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
-            normal = normalize(abs(det) * normal - grad * 0.9 * fadeB * (1.0 - gTerrainWet));
+            vec3 nb = abs(det) * normal - grad * 0.9 * fadeB * (1.0 - gTerrainWet);
+            if (dot(nb, nb) > 1e-24) normal = normalize(nb);
           }`);
     };
     return mat;
