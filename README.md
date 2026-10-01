@@ -64,8 +64,12 @@ Across the countryside:
 - **Driver aids you can switch off:** ABS, traction control, stability
   control and steering assist.
 - The body leans visibly with weight transfer and shakes on rough ground.
-- **Five cars with distinct handling**, from the planted Volta R and Tenshi X
-  hypercars to the tail-happy Kaze Drift.
+- **Eight cars with distinct handling**, from the planted Volta R and Tenshi X
+  hypercars to the tail-happy Kaze Drift, plus three cars modelled on
+  real ones under lookalike names:
+  - **Stuttgart 911 GT3** (911-style): rear-engined, with a big launch and a light nose
+  - **Bavaria M4 Competition** (M4-style): front-engined, torquey and easy to slide
+  - **Modena Huayra** (Huayra-style): a mid-engined V12 hypercar, with a top speed of about 383 km/h
 
 ### Events and activities
 
@@ -89,7 +93,7 @@ Across the countryside:
   zones and 4 ramp jumps, each rated 1–3 stars.
 - **Skill chains:** drift, speed, air, cone smashes and clean driving build a
   multiplier. A crash breaks the chain.
-- **Progression:** credits, XP and levels. You can buy 5 cars and upgrade the
+- **Progression:** credits, XP and levels. You can buy 8 cars and upgrade the
   engine, tyres and brakes. Everything is saved automatically.
 - **Traffic** drives the expressways (including the C1), Tokyo, Ito, the
   lake, the festival loop and Legend Island.

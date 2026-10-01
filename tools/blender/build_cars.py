@@ -1,7 +1,7 @@
 """
 Horizon Drive — procedural car model generator for Blender (4.2+).
 
-Builds the five cars of the game as glTF binaries (assets/cars/<id>.glb).
+Builds the eight cars of the game as glTF binaries (assets/cars/<id>.glb).
 Every body is a lofted mesh: cross-sections are generated from per-style
 profile curves (width, sill, beltline, roof line, cabin), then subdivided,
 wheel arches are cut with booleans, and detail parts (grille, mirrors, wing,
@@ -106,6 +106,48 @@ STYLES = {
         windshield=(.28, .41), rear_window=(.56, .66),
         head=(.012, .07), tail=(.94, .995),
         wing='big', exhaust='twin_high', mirror_s=.39, interior=(.39, .56),
+    ),
+    # Rear-engine sports car in the 911 mould: short nose, round headlamps on
+    # raised front wings, roof sloping all the way down to wide rear hips.
+    'stuttgart-gt3': dict(
+        front=2.02, rear=2.30,
+        w=[(0, .60), (.04, .76), (.12, .85), (.25, .86), (.45, .84), (.62, .90), (.78, .99), (.9, .96), (.97, .87), (1, .72)],
+        zb=[(0, .27), (.05, .15), (.2, .13), (.85, .13), (.95, .19), (1, .32)],
+        zbelt=[(0, .46), (.05, .60), (.14, .68), (.35, .76), (.6, .80), (.82, .86), (.95, .84), (1, .76)],
+        ztop=[(0, .50), (.04, .62), (.12, .70), (.26, .74), (.33, .82), (.46, 1.27), (.56, 1.28), (.70, 1.12), (.85, .97), (.95, .90), (1, .80)],
+        cabin=[(.30, 0), (.44, 1), (.62, 1), (.85, 0)],
+        wg=.88, wr=.62, b_pillar=.60,
+        windshield=(.33, .46), rear_window=(.63, .83),
+        head=(.015, .08), tail=(.94, .997),
+        wing='gt', exhaust='center', mirror_s=.45, interior=(.42, .66),
+    ),
+    # Bavarian performance coupe in the M4 mould: long bonnet, tall twin
+    # kidney grille, upright cabin, short flat boot with a lip spoiler.
+    'bavaria-m4': dict(
+        front=2.34, rear=2.22,
+        w=[(0, .80), (.03, .88), (.1, .93), (.3, .94), (.6, .94), (.85, .95), (.96, .91), (1, .83)],
+        zb=[(0, .30), (.04, .18), (.2, .16), (.85, .16), (.96, .22), (1, .33)],
+        zbelt=[(0, .62), (.04, .70), (.2, .76), (.4, .80), (.7, .84), (.9, .86), (1, .82)],
+        ztop=[(0, .64), (.04, .74), (.2, .80), (.32, .86), (.47, 1.34), (.64, 1.36), (.76, 1.12), (.81, .99), (.97, .97), (1, .86)],
+        cabin=[(.32, 0), (.47, 1), (.68, 1), (.80, 0)],
+        wg=.90, wr=.70, b_pillar=.60,
+        windshield=(.33, .47), rear_window=(.68, .79),
+        head=(.01, .065), tail=(.94, .995),
+        wing='lip', exhaust='quad', grille='kidney', mirror_s=.46, interior=(.45, .72),
+    ),
+    # Italian V12 hypercar in the Huayra mould: rounded teardrop body, bubble
+    # canopy, swollen front wings, quad centre exhaust, flap spoiler.
+    'modena-hy': dict(
+        front=2.34, rear=2.40,
+        w=[(0, .64), (.03, .82), (.1, .97), (.2, 1.0), (.38, .91), (.55, .92), (.72, 1.02), (.86, 1.0), (.96, .91), (1, .76)],
+        zb=[(0, .21), (.05, .12), (.2, .11), (.85, .11), (.95, .17), (1, .27)],
+        zbelt=[(0, .40), (.05, .54), (.15, .64), (.35, .68), (.6, .76), (.85, .80), (1, .74)],
+        ztop=[(0, .44), (.05, .56), (.18, .66), (.27, .70), (.41, 1.12), (.52, 1.14), (.62, 1.06), (.78, .90), (.92, .84), (1, .76)],
+        cabin=[(.25, 0), (.39, 1), (.55, 1), (.71, 0)],
+        wg=.82, wr=.52, b_pillar=.99,
+        windshield=(.27, .40), rear_window=(.57, .68),
+        head=(.012, .07), tail=(.94, .995),
+        wing='lip', exhaust='center_quad', mirror_s=.38, interior=(.38, .57),
     ),
 }
 
@@ -357,12 +399,27 @@ def add_details(st, M, parts):
 
     # Front intake / grille insert
     zb0 = curve(st['zb'], 0.03)
-    g = primitive('cube', 'Grille', M['Grille'], size=1, location=(0, nose_y + 0.10, zb0 + 0.12))
-    g.scale = (curve(st['w'], 0.03) * 1.25, 0.12, 0.13)
-    bev = g.modifiers.new('b', 'BEVEL')
-    bev.width = 0.03
-    bev.segments = 2
-    parts.append(g)
+    if st.get('grille') == 'kidney':
+        # two tall kidney grilles framed in chrome, plus a wide lower intake
+        for sx in (-1, 1):
+            k = primitive('cube', 'Grille', M['Grille'], size=1, location=(sx * 0.17, nose_y - 0.02, zb0 + 0.27))
+            k.scale = (0.3, 0.12, 0.36)
+            bev = k.modifiers.new('b', 'BEVEL'); bev.width = 0.06; bev.segments = 3
+            parts.append(k)
+            f = primitive('cube', 'KidneyFrame', M['Chrome'], size=1, location=(sx * 0.17, nose_y - 0.015, zb0 + 0.27))
+            f.scale = (0.33, 0.11, 0.39)
+            bev = f.modifiers.new('b', 'BEVEL'); bev.width = 0.07; bev.segments = 3
+            parts.append(f)
+        g = primitive('cube', 'Grille', M['Grille'], size=1, location=(0, nose_y + 0.14, zb0 + 0.05))
+        g.scale = (curve(st['w'], 0.03) * 1.1, 0.1, 0.08)
+        parts.append(g)
+    else:
+        g = primitive('cube', 'Grille', M['Grille'], size=1, location=(0, nose_y + 0.10, zb0 + 0.12))
+        g.scale = (curve(st['w'], 0.03) * 1.25, 0.12, 0.13)
+        bev = g.modifiers.new('b', 'BEVEL')
+        bev.width = 0.03
+        bev.segments = 2
+        parts.append(g)
 
     # Splitter
     sp = primitive('cube', 'Splitter', M['Carbon'], size=1, location=(0, nose_y + 0.16, zb0 - 0.02))
@@ -409,6 +466,7 @@ def add_details(st, M, parts):
         'center': [(-0.07, z_ex + 0.08), (0.07, z_ex + 0.08)],
         'single': [(0.45, z_ex)],
         'single_big': [(-0.45, z_ex)],
+        'center_quad': [(-0.11, z_ex + 0.1), (0.11, z_ex + 0.1), (-0.11, z_ex - 0.02), (0.11, z_ex - 0.02)],
         'twin_high': [(-0.12, curve(st['zbelt'], 0.98) - 0.05), (0.12, curve(st['zbelt'], 0.98) - 0.05)],
     }[ex]
     r = 0.075 if ex == 'single_big' else 0.05
@@ -565,6 +623,7 @@ def build_wheel(M, spokes=5, style='split'):
 RIMS = {
     'sakura-gt': (5, 'split'), 'volta-r': (10, 'single'), 'kaze-drift': (6, 'single'),
     'yama-rally': (5, 'single'), 'tenshi-x': (7, 'split'),
+    'stuttgart-gt3': (5, 'single'), 'bavaria-m4': (10, 'split'), 'modena-hy': (16, 'single'),
 }
 
 
@@ -655,6 +714,7 @@ def render_preview(car_id, root, wheel, caliper, preview_dir):
 FACTORY_PAINT = {
     'sakura-gt': (0.58, 0.6, 0.64), 'volta-r': (0.55, 0.12, 0.02), 'kaze-drift': (1.0, 0.03, 0.27),
     'yama-rally': (0.01, 0.16, 0.83), 'tenshi-x': (0.9, 0.9, 0.9),
+    'stuttgart-gt3': (0.02, 0.22, 0.08), 'bavaria-m4': (0.3, 0.45, 0.02), 'modena-hy': (0.04, 0.05, 0.07),
 }
 
 
