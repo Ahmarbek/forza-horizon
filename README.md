@@ -68,7 +68,8 @@ Across the countryside:
   hypercars to the tail-happy Kaze Drift, plus three cars modelled on
   real ones under lookalike names:
   - **Stuttgart 911 GT3** (911-style): rear-engined, with a big launch and a light nose
-  - **Bavaria M4 Competition** (M4-style): front-engined, torquey and easy to slide
+  - **BMW M4 GT3 EVO**: a detailed imported model, converted with
+    `tools/blender/import_m4_gt3.py`. It's a light race car with big aero
   - **Modena Huayra** (Huayra-style): a mid-engined V12 hypercar, with a top speed of about 383 km/h
 
 ### Events and activities
